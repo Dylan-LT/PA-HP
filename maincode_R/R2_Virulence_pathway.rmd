@@ -1,0 +1,295 @@
+# PA-HP
+## Virulence pathway
+```{r}
+rm(list=ls())
+deg_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_deg_list.csv")
+deg_count <-  data.frame(table(deg_list$mu_name))
+colnames(deg_count) <- c("Var1","deg_count")
+  
+virus <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/PA_pathway.csv")
+unique(virus$Product)
+virus_len <- data.frame(table(virus$Pathway))
+
+ggplot(virus_len,aes(x=Var1,y=Freq,fill=Var1)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none") +
+  scale_fill_brewer(palette=9)+
+  geom_text(aes(label = Freq), hjust = -0.3, size = 3)+
+  coord_flip() +
+  xlab("Pathway")
+# ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F2_vir/virus_pathway_bar.pdf", width = 6, height = 4)
+
+colnames(virus_len) <- c("Var1","pathway_total")
+
+# deg_list$Gene.Name <- case_when(
+#         deg_list$Row.names == "PA2840" ~ "deaD",
+#         deg_list$Row.names == "PA0095" ~ "vgrG1b",
+#         deg_list$Row.names == "PA1441" ~ "fliK",
+#         deg_list$Row.names == "PA0797" ~ "pmiR",
+#         deg_list$Row.names == "PA2588" ~ "cdpR",
+#         TRUE ~ deg_list$Gene.Name)
+
+deg_list$symbol <- ifelse(deg_list$Gene.Name=="",deg_list$Row.names,deg_list$Gene.Name)
+# setdiff(virus$Product,deg_list$symbol)
+
+viru_list <- merge(deg_list,virus,by.x="symbol",by.y="Product")
+
+viru_count <- aggregate(Row.names ~ mu_name + Pathway, viru_list, FUN = length)
+count <- merge(viru_count,deg_count,by.x="mu_name",by.y="Var1")
+count <- merge(count,virus_len,by.x="Pathway",by.y="Var1")
+
+count$p <- count$Row.names/count$pathway_total
+# write.csv(count, "/Users/lubeifang/Desktop/PA_HP/files/HPinViru_path.csv")
+
+
+# # Assign HP to top pathway
+# cate1 <- count[order(count$p,decreasing = T),]
+# cate1 <- cate1[!duplicated(cate1$mu_name),]
+# 
+# cate_count <- data.frame(table(cate1$Cate))
+# cate_count <- data.frame(table(cate1[cate1$p >= 0.2,]$Cate))
+# 
+# ggplot(cate1,aes(x=Cate,y=p,fill=Cate)) +
+#   geom_violin(color=NA,width=0.5) +
+#   geom_boxplot(width = 0.1, outliers = F, color = "#76608A") +
+#   coord_flip() +
+#   theme_bw() +
+#   scale_fill_brewer(palette = 1) +
+#   theme(legend.position = "none",
+#         panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank())
+```
+###plot
+```{R}
+library(gghalves)
+library(ggrepel)
+
+count <- count %>%
+  group_by(Pathway) %>%  # 按Pathway分组
+  arrange(desc(p)) %>%  # 按p值升序排列
+  mutate(top5 = ifelse(row_number() <= 5, "yes", NA))  # 为前5个添加标签
+count$label <- ifelse(!is.na(count$top5), count$mu_name, NA)
+
+ggplot(count,aes(x=Pathway,y=p,fill=Pathway)) +
+  geom_point(position = position_jitter(width = 0.1),size = 0.5, color = ifelse(is.na(count$label), "grey", "pink"), alpha = 0.4) +
+  geom_half_violin(position=position_nudge(x=0.1,y=0), side='R', trim = F, color = NA, width = 1.5) +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none") +
+  geom_text_repel(data = count, aes(label = label), 
+                   size = 2, 
+                   box.padding = 0.35, 
+                   point.padding = 0.5,
+                   segment.color = 'grey50',
+                    min.segment.length = 0) +
+  scale_fill_brewer(palette=9) +
+  coord_flip()
+# ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F2_vir/HPinPathway_violin.pdf",width = 6, height = 4)
+
+num <- as.data.frame(table(count$Pathway))
+ggplot(num,aes(x=Var1,y=Freq,fill=Var1)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none") +
+  scale_fill_brewer(palette=9)+
+  geom_text(aes(label = Freq), hjust = -0.3, size = 3)+
+  coord_flip() +
+  xlab("")
+
+num <- as.data.frame(table(count[count$p>0.3,]$Pathway))
+sum(num$Freq)
+length(unique(count[count$p>0.3,]$mu_name))
+ggplot(num,aes(x=Var1,y=Freq,fill=Var1)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "none") +
+  scale_fill_brewer(palette=2)+
+  geom_text(aes(label = Freq), hjust = -0.3, size = 3)+
+  xlab("")
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F2_vir/HPinPathway_p0,3.pdf",width = 3, height = 4)
+
+count[count$p>0.3,]
+```
+
+
+###select All-round and specialized MU
+```{r}
+## Regulate all pathway
+allround <- count[count$p > 0.2,]
+HP_allround <- data.frame(table(allround$mu_name)) %>%
+  subset(Freq>4)
+
+
+## Regulate only one pathway
+specialized <- count %>%
+  group_by(mu_name) %>%
+  arrange(desc(p)) %>%
+  mutate(rank = row_number()) %>%
+  summarise(
+    max_p = max(p[rank == 1]),
+    all_others_under_0.1 = all(p[rank != 1] < 0.1),
+    keep = (max_p > 0.3) & all_others_under_0.1
+  ) %>%
+  filter(keep) %>%
+  left_join(count, by = "mu_name")
+
+```
+
+
+### virulence network
+```{r}
+top5 <- count[!is.na(count$label),]
+unique(top5$mu_name)
+top5_list <- viru_list %>%
+  subset(viru_list$mu_name %in% unique(top5$mu_name))
+setdiff(unique(top5_list$mu_name),unique(top5$mu_name))
+write.csv(top5_list,"/Users/lubeifang/Desktop/PA_HP/files/top5inPath_deg.csv",row.names = F)
+
+top3 <- count %>%
+  group_by(Pathway) %>%  # 按Pathway分组
+  arrange(desc(p)) %>%  # 按p值升序排列
+  mutate(label = ifelse(row_number() <= 3, count$mu_name, NA))
+top3 <- subset(top3,!is.na(top3$label))
+unique(top3$mu_name)
+top3_list <- viru_list %>%
+  subset(viru_list$mu_name %in% unique(top3$mu_name)) %>%
+  subset(log2FoldChange > 2 | log2FoldChange < -2)
+length(unique(top3_list$mu_name))
+length(unique(top3_list$symbol))
+write.csv(top3_list,"/Users/lubeifang/Desktop/PA_HP/files/top3inPath_deg.csv",row.names = F,quote = F)
+```
+
+
+#### pie plot
+```{r}
+library(ggradar)
+unique(top3$mu_name)
+top3_pie <- count %>%
+  subset(count$mu_name %in% unique(top3$mu_name)) 
+
+
+for (i in  unique(top3$mu_name)) {
+  df <- data.frame(name = i,
+                   as.data.frame(t(top3_pie[top3_pie$mu_name == i,][,c(1,6)])))
+  colnames(df) <- df[c(1),]
+  df <- df[c(2),]
+  df[,c(2:ncol(df))] <- as.numeric(df[,c(2:ncol(df))] )
+  
+  ggradar(df,
+          background.circle.colour = "white",
+          axis.line.colour = "gray60",
+          gridline.min.colour = "gray60",
+          gridline.mid.colour = "gray60",
+          gridline.max.colour = "gray60",
+          group.line.width = 0.5,
+          group.point.size = 0.1,
+          grid.min = 0,
+          grid.mid = 0.4,
+          grid.max = 0.8,
+          label.gridline.min = F,
+          label.gridline.mid = F,
+          label.gridline.max = F,
+          fill = T,
+          legend.position = "bottom") 
+  ggsave(paste0("/Users/lubeifang/Desktop/PA_HP/Figures/F2_vir/pie/",i,".pdf"), width = 3, height = 3)
+}
+
+
+unique(specialized$mu_name)
+special_pie <- count %>%
+  subset(count$mu_name %in% unique(specialized$mu_name)) 
+for (i in  unique(specialized$mu_name)) {
+  df <- data.frame(name = i,
+                   as.data.frame(t(special_pie[special_pie$mu_name == i,][,c(1,6)])))
+  colnames(df) <- df[c(1),]
+  df <- df[c(2),]
+  df[,c(2:ncol(df))] <- as.numeric(df[,c(2:ncol(df))] )
+  
+  ggradar(df,
+          background.circle.colour = "white",
+          axis.line.colour = "gray60",
+          gridline.min.colour = "gray60",
+          gridline.mid.colour = "gray60",
+          gridline.max.colour = "gray60",
+          group.line.width = 0.5,
+          group.point.size = 0.1,
+          grid.min = 0,
+          grid.mid = 0.4,
+          grid.max = 0.8,
+          label.gridline.min = F,
+          label.gridline.mid = F,
+          label.gridline.max = F,
+          fill = T,
+          legend.position = "bottom") 
+  ggsave(paste0("/Users/lubeifang/Desktop/PA_HP/Figures/F2_vir/pie/",i,".pdf"), width = 3, height = 3)
+}
+
+```
+
+
+#### upset
+```{r}
+count <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HPinViru_path.csv")
+unique(count$Pathway)
+x <- list(EPS_Biofilm = count[count$Pathway=="EPS_Biofilm",]$mu_name,
+          MIC= count[count$Pathway=="MIC",]$mu_name,
+          motility = count[count$Pathway=="motility",]$mu_name,
+          T3SS = count[count$Pathway=="T3SS",]$mu_name,
+          T6SS = count[count$Pathway=="T6SS",]$mu_name,
+          PYO = count[count$Pathway=="PYO",]$mu_name,
+          QS = count[count$Pathway=="QS",]$mu_name)
+library(UpSetR)
+pdf("/Users/lubeifang/Desktop/PA_HP/Figures/F2_vir/UpSetR_pathway.pdf", width = 6, height = 4)
+upset(
+  fromList(x), 
+  order.by = "freq",         
+  nsets = 7,               
+  nintersects = 10,        
+  main.bar.color = "lightblue", 
+  sets.bar.color = "skyblue",
+  matrix.color = "lightblue3",
+  shade.color = "lightblue4",     
+  sets.x.label = "Gene count",   
+  mainbar.y.label = "Intersection Size", 
+  keep.order = TRUE,
+  mb.ratio =  c(0.6,0.4)     
+)
+dev.off()
+
+
+count <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HPinViru_path.csv")
+count <- count[count$p > 0.3,]
+unique(count$Pathway)
+x <- list(EPS_Biofilm = count[count$Pathway=="EPS_Biofilm",]$mu_name,
+          MIC= count[count$Pathway=="MIC",]$mu_name,
+          motility = count[count$Pathway=="motility",]$mu_name,
+          T3SS = count[count$Pathway=="T3SS",]$mu_name,
+          T6SS = count[count$Pathway=="T6SS",]$mu_name,
+          PYO = count[count$Pathway=="PYO",]$mu_name,
+          QS = count[count$Pathway=="QS",]$mu_name)
+library(UpSetR)
+pdf("/Users/lubeifang/Desktop/PA_HP/Figures/F2_vir/UpSetR_pathway_anno.pdf", width = 6, height = 4)
+upset(
+  fromList(x), 
+  order.by = "freq",         
+  nsets = 7,               
+  nintersects = 10,        
+  main.bar.color = "lightblue", 
+  sets.bar.color = "skyblue",
+  matrix.color = "lightblue3",
+  shade.color = "lightblue4",     
+  sets.x.label = "Gene count",   
+  mainbar.y.label = "Intersection Size", 
+  keep.order = TRUE,
+  mb.ratio =  c(0.6,0.4)     
+)
+dev.off()
+```

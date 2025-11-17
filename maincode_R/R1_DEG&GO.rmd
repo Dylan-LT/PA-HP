@@ -1,0 +1,690 @@
+# PA-HP
+## DEG analysis
+```{r}
+rm(list=ls())
+library(data.table)
+library(ggplot2)
+library(dplyr)
+library(DESeq2)
+library(ggpubr)
+library(ggthemes)
+library(clusterProfiler)
+
+
+PA_anno <- read.csv("/Users/lubeifang/Desktop/BIOTOOLS/ref/PAO1_ref.csv", header = T)
+lane <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/lane_cor.csv")
+mu <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_mu.csv")
+counts <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/merged_counts.txt",header = T, sep="\t")
+
+PAgo = read.csv("/Users/lubeifang/Desktop/BIOTOOLS/ref/PAO1gene_ontology_csv.csv",header = T)
+PAgo_term2gene <- as.data.frame(PAgo[, c(5,1)])
+PAgo_term2name <- as.data.frame(PAgo[, c(5,6)])
+
+PAkegg = read.csv("/Users/lubeifang/Desktop/BIOTOOLS/ref/PA_KEGG.csv",header = T)
+PAkegg_term2gene <- as.data.frame(PAkegg[, c(4,1)])
+PAkegg_term2name <- as.data.frame(PAkegg[, c(4,3)])
+
+PA_go_clu <- as.data.frame(PAgo[,c(5,7)]) %>% distinct()
+
+
+
+exprSet=counts[,7:ncol(counts)]
+rownames(exprSet) <- counts[,1]
+```
+
+### DEG for each mutant
+```{R}
+deg_list <- data.frame()
+
+for (i in unique(lane$lane)[1:22]){
+  print(i)
+  for (mu in unique(lane[lane$lane == i,]$index)){
+    print(mu)
+    mu_names <- lane[lane$lane == i & lane$index == mu,]$name
+    wt_names <- lane[lane$lane == "WT" & lane$mu == i,]$name
+    colname <- c(wt_names, mu_names)
+    OE <- exprSet[,colname]
+    condition <- factor(c(rep("control",2), rep("treat",2)))
+    coldata <- data.frame(row.names = colnames(OE), condition)
+    dds <- DESeqDataSetFromMatrix(countData=OE, colData=coldata,design=~condition)
+    dds <- DESeq(dds)
+    # vsdata <- vst(dds, blind=FALSE)
+    res <- results(dds,contrast = c('condition', 'treat', 'control'))
+    resdata <- merge(as.data.frame(res), 
+                     as.data.frame(counts(dds,normalized=TRUE)),
+                     by="row.names",sort=FALSE)
+    annotation <- merge(resdata, PA_anno, by.x="Row.names", by.y="Locus.Tag", all.x= T)
+    
+    mu_name <- lane[lane$lane == i & lane$index == mu,]$mu[1]
+    mu_name <- substr(mu_name, 1, nchar(mu_name) - 2)
+    mu_name <- gsub("-1-LEL3355-", "",mu_name)
+    
+    # write.csv(annotation,file = paste0("/Users/lubeifang/Desktop/PA_HP/raw/",mu_name,"_raw.csv"),row.names = FALSE)
+    
+    annotation_DEG <- annotation[annotation$Feature.Type != "rRNA",][order(annotation$padj),]  %>%
+      subset(log2FoldChange > 1 | log2FoldChange < -1) %>%
+      subset(pvalue < 0.001)
+    annotation_DEG <- annotation_DEG[order(annotation_DEG$log2FoldChange, decreasing = TRUE),]
+    # write.csv(annotation_DEG,file = paste0("/Users/lubeifang/Desktop/PA_HP/DEG/",mu_name,"_DEG.csv"),row.names = FALSE)
+    
+    deg_list <- bind_rows(deg_list, data.frame(mu_name = mu_name, as.data.frame(annotation_DEG)))
+  }
+}
+# deg_list <- deg_list[,c(1:8,14)]
+# write.csv(deg_list,"/Users/lubeifang/Desktop/PA_HP/files/HP_deg_list.csv",row.names = F)
+```
+
+
+### deg number plot
+```{R}
+deg_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_deg_list.csv")
+deg_count_df <- data.frame(table(deg_list$mu_name))
+colnames(deg_count_df) <- c("mu", "count")  
+
+summary(deg_count_df$count)
+sum(deg_count_df$count)
+
+ggplot(deg_count_df, aes(x=count)) +
+  geom_density(fill = "skyblue", color = "black", alpha = 0.7) +
+  geom_boxplot(width = 0.0005) +
+  labs(
+    y = "Density",
+    x = "Number of DEGs per Mutant"
+  ) +
+  theme_bw() +
+  theme() 
+
+gene_count_df <- data.frame(table(deg_list$Row.names))
+colnames(gene_count_df) <- c("gene", "count")  
+
+summary(gene_count_df$count)
+sum(gene_count_df$count)
+
+ggplot(gene_count_df, aes(x=count)) +
+  geom_density(fill = "skyblue", color = "black", alpha = 0.7) +
+  geom_boxplot(width = 0.0005) +
+  labs(
+    y = "Density",
+    x = "Times of genes been regulated"
+  ) +
+  theme_bw() +
+  theme()
+
+df <- rbind (data.frame(cate = "deg", num = deg_count_df$coun),
+             data.frame(cate = "gene", num = gene_count_df$count))
+ggplot(df,aes(x=cate,y=log10(num),fill=cate)) +
+  geom_violin(color=NA,width=0.5) +
+  geom_boxplot(width = 0.1, outliers = F, color = "#76608A") +
+  coord_flip() +
+  theme_bw() +
+  scale_fill_brewer(palette = 1) +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/violin.pdf",width = 4, height = 6)
+ 
+```
+
+### Different bar GO
+```{r}
+summary(gene_count_df$count)
+q1 <- gene_count_df[gene_count_df$count <=3,] # no GO <= 1, 2, 3
+q2 <- gene_count_df[gene_count_df$count >300 & gene_count_df$count <=440,]
+GO <- enricher(q2$gene,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.05)
+pdf("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/barplot_noGO_300-440.pdf",width = 8, height = 6)
+dotplot(GO)
+dev.off()
+df <- data.frame(name = mu_name, as.data.frame(GO))
+```
+
+
+##GO&KEGG
+### GO KEGG analysis
+```{r}
+library(stringr)
+deg_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_deg_list.csv")
+# deg_list <-merge(deg_list, PA_anno, by.x="Row.names", by.y="Locus.Tag", all.x= T)
+
+kegg_list <- data.frame()
+GO_list <- data.frame()
+for (i in unique(deg_list$mu_name)){
+  print(i)
+  annotation_DEG <- deg_list[deg_list$mu_name == i,]
+  
+  # all deg GO
+  GO <- enricher(annotation_DEG$Row.names,
+                 TERM2GENE = PAgo_term2gene,
+                 TERM2NAME = PAgo_term2name,
+                 pvalueCutoff = 0.01)
+  if (nrow(as.data.frame(GO)) == 0 ){
+    next
+  }
+  else{
+    df <- data.frame(name = i, cate = "all", as.data.frame(GO))
+  }
+  GO_list <- rbind(GO_list, df)
+  
+  # up deg GO
+  GO <- enricher(annotation_DEG[annotation_DEG$log2FoldChange >0,]$Row.names,
+                 TERM2GENE = PAgo_term2gene,
+                 TERM2NAME = PAgo_term2name,
+                 pvalueCutoff = 0.01)
+  if (nrow(as.data.frame(GO)) == 0 ){
+    next
+  }
+  else{
+    df <- data.frame(name = i, cate = "up", as.data.frame(GO))
+  }
+  GO_list <- rbind(GO_list, df)
+  
+  # down deg GO
+  GO <- enricher(annotation_DEG[annotation_DEG$log2FoldChange < 0,]$Row.names,
+                 TERM2GENE = PAgo_term2gene,
+                 TERM2NAME = PAgo_term2name,
+                 pvalueCutoff = 0.01)
+  
+  if (nrow(as.data.frame(GO)) == 0 ){
+    next
+  }
+  else{
+    df <- data.frame(name = i, cate = "down", as.data.frame(GO))
+  }
+  GO_list <- rbind(GO_list, df)
+  
+  # all deg KEGG
+  KEGG <- enricher(annotation_DEG$Row.names,
+                   TERM2GENE = PAkegg_term2gene,
+                   TERM2NAME = PAkegg_term2name,
+                   pvalueCutoff = 0.01)
+
+  if (nrow(as.data.frame(KEGG)) == 0 ){
+    next
+  }
+  else{
+    df <- data.frame(name = i,cate = "all", as.data.frame(KEGG))
+  }
+  kegg_list <- rbind(kegg_list, df)
+ 
+  # all up deg KEGG
+  KEGG <- enricher(annotation_DEG[annotation_DEG$log2FoldChange > 0,]$Row.names,
+                   TERM2GENE = PAkegg_term2gene,
+                   TERM2NAME = PAkegg_term2name,
+                   pvalueCutoff = 0.01)
+
+  if (nrow(as.data.frame(KEGG)) == 0 ){
+    next
+  }
+  else{
+    df <- data.frame(name = i,cate = "up", as.data.frame(KEGG))
+  }
+  kegg_list <- rbind(kegg_list, df)
+  
+  
+  # all down deg KEGG
+  KEGG <- enricher(annotation_DEG[annotation_DEG$log2FoldChange < 0,]$Row.names,
+                   TERM2GENE = PAkegg_term2gene,
+                   TERM2NAME = PAkegg_term2name,
+                   pvalueCutoff = 0.01)
+
+  if (nrow(as.data.frame(KEGG)) == 0 ){
+    next
+  }
+  else{
+    df <- data.frame(name = i,cate = "down", as.data.frame(KEGG))
+  }
+  kegg_list <- rbind(kegg_list, df)
+}
+
+
+# write.csv(GO_list,"/Users/lubeifang/Desktop/PA_HP/files/HP_GO_list_all.csv",row.names = T,quote=T)
+# write.csv(kegg_list,"/Users/lubeifang/Desktop/PA_HP/files/HP_kegg_list.csv",row.names = F)
+```
+
+### non-GO venn
+```{r}
+library(ggVennDiagram)
+library(patchwork)
+GO_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_GO_list_all1028.csv", row.names = 1)
+
+GO_list <- GO_list[GO_list$cate == "all",]
+GO_list <- merge(GO_list,PA_go_clu,by.x="ID",by.y="Accession")
+mu <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_mu.csv")
+table(GO_list$cate)
+summary(as.data.frame(table(GO_list$name))$Freq)
+temp <- as.data.frame(table(GO_list$name))
+# GO_list<- merge(GO_list, PA_go_clu,by.x="ID",by.y="Accession")
+no_go_hp <- data.frame(name=setdiff(mu$mutant,unique(GO_list$name)))
+
+
+unique(GO_list$Namespace)
+table(GO_list$Namespace)
+GO_list_bp <- subset(GO_list, GO_list$Namespace == "biological_process")
+length(unique(GO_list_bp$name))
+length(setdiff(unique(deg_list$mu_name),unique(GO_list_bp$name)))
+
+GO_list_cc <- subset(GO_list, GO_list$Namespace == "cellular_component")
+length(unique(GO_list_cc$name))
+length(setdiff(unique(deg_list$mu_name),unique(GO_list_cc$name)))
+
+GO_list_mf <- subset(GO_list, GO_list$Namespace == "molecular_function")
+length(unique(GO_list_mf$name))
+length(setdiff(unique(deg_list$mu_name),unique(GO_list_mf$name)))
+
+x <- list(no_biological_process = setdiff(unique(deg_list$mu_name),unique(GO_list_bp$name)),
+          no_cellular_component = setdiff(unique(deg_list$mu_name),unique(GO_list_cc$name)),
+          no_molecular_function = setdiff(unique(deg_list$mu_name),unique(GO_list_mf$name)))
+p1<-ggVennDiagram(x, label_alpha = 0, edge_size = 0.3, label = "count") +
+    scale_fill_gradient(low="white",high = "#B6C7D1") +
+    theme(legend.position = "none")
+# ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1/venn1.pdf",width = 2, height = 2)
+
+x <- list(biological_process = unique(GO_list_bp$name),
+          cellular_component = unique(GO_list_cc$name),
+          molecular_function = unique(GO_list_mf$name))
+p2<-ggVennDiagram(x, label_alpha = 0, edge_size = 0.3, label = "count") +
+    scale_fill_gradient(low="white",high = "#B6C7D1") +
+    theme(legend.position = "none")
+p <- p2/p1
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/venn.pdf",p,width = 2, height = 4)
+```
+
+## GO enrich
+```{r}
+library(aPEAR)
+library(clusterProfiler)
+
+GO_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_GO_list_all.csv")
+GO_list <- GO_list[GO_list$cate == "all",]
+# write.csv(GO_list[,c(1,2,4)],"/Users/lubeifang/Desktop/PA_HP/files/HP2GO_network_input.csv",row.names = F,quote=F)
+unique(GO_list$Description)
+HP_go_num <- as.data.frame(table(GO_list$name))
+
+GO_enrich <- data.frame()
+
+for (i in unique(GO_list$name)){
+    print(i)
+    test <- GO_list[GO_list$name == i,]
+    
+    if (nrow(test) > 1){
+        # 使用 tryCatch 包围可能产生错误的代码
+        p <- tryCatch({
+            enrichmentNetwork(test, plotOnly = FALSE)$clusters
+        }, error = function(e) {
+            cat("Error with", i, ": ", e$message, "\n")  # 打印错误信息
+            return(NULL)  # 返回NULL，跳过这次循环的后续代码
+        })
+        
+        # 如果p不是NULL，继续执行后续代码
+        if (!is.null(p)) {
+            GO_enrich <- rbind(GO_enrich, data.frame(name = i, as.data.frame(p)))
+        }
+    }
+}
+
+enrichmentNetwork(test, plotOnly = T)
+
+length(unique(GO_enrich$name))
+test <- as.data.frame(table(GO_enrich$Cluster))
+# write.csv(GO_enrich, "/Users/lubeifang/Desktop/PA_HP/files/GO_enrich_results.csv", row.names = FALSE)
+```
+
+
+### chrod PLOT
+```{R}
+library(stringr)
+library(dplyr)
+library(circlize)
+library(tidyr)
+library(purrr)
+
+go_plot <- GO_enrich[!duplicated(GO_enrich[,c("Cluster","name")]),]
+
+result <- go_plot %>%
+  group_by(name) %>%
+  # 确保每组有超过一个Category
+  filter(n_distinct(Cluster) > 1) %>%
+  # 计算每个name分组下Category的所有可能的两两组合
+  summarise(Category_combinations = list(combn(unique(Cluster), 2, simplify = FALSE)), .groups = 'drop') %>%
+  unnest(Category_combinations) %>%
+  # 将组合转换为字符型，便于计数
+  mutate(Combination = sapply(Category_combinations, paste, collapse = " + "))
+
+plot <- as.data.frame(table(result$Combination))
+write.csv(plot,"/Users/lubeifang/Desktop/PA_HP/files/GOenrich_chord_results.csv",row.names = F)
+
+# 准备chordDiagram需要的数据格式
+chord_data <- data.frame(from = sapply(strsplit(as.character(plot$Var1), " \\+ "), `[`, 1), 
+                         to = sapply(strsplit(as.character(plot$Var1), " \\+ "), `[`, 2), 
+                         freq = plot$Freq)
+
+
+pdf("/Users/lubeifang/Desktop/chord_goEnrich_all.pdf",width = 10, height=10)
+chordDiagram(chord_data, grid.col = NULL, transparency = 0.5)
+dev.off()
+```
+
+###plot enrich number
+```{r}
+GO_enrich <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/GO_enrich_results.csv")
+
+GO_enrich_num <- as.data.frame(table(GO_enrich$name,GO_enrich$Cluster)) %>%
+  subset(Freq != 0)
+
+num <- as.data.frame(table(GO_enrich[!duplicated(GO_enrich[,c("Cluster","name")]),]$Cluster))
+
+ggplot(num[num$Freq >2,], aes(x=reorder(Var1, -Freq), y=Freq)) +
+  geom_bar(stat="identity", fill="#66A4C6") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(x="GO Enrichment Cluster", y="Number of HPs Enriched") +
+  geom_text(aes(label=Freq), vjust=-0.5, size=3)
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/GOenrich_number.pdf",width = 5, height = 3)
+```
+
+
+## HP-GO network
+```{r}
+library(ggplot2)
+library(ggrepel)
+ana <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/ana_HP2GO_network.csv")
+ana_HP <- merge(ana,mu,by.x="name",by.y="mutant")
+ggplot(ana_HP, aes(x = BetweennessCentrality, y = Degree, size = NeighborhoodConnectivity)) +
+  geom_point(alpha = 0.7, color="#66A4C6") +
+  theme_bw() +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = "right") +
+  scale_color_brewer(palette = 1) +
+  # 添加参考线（四象限的分界线）
+  geom_vline(xintercept = 0.01, linetype = "dashed", color = "#76608A", size = 0.5) + # 垂直线
+  geom_hline(yintercept = 12, linetype = "dashed", color = "#76608A", size = 0.5) + # 水平线
+  # 标注特定点
+  geom_text_repel(aes(label = ifelse(Degree >= 12 & BetweennessCentrality > 0.01, 
+                               as.character(name), '')), hjust = 0, vjust = 1)
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/HPGO_quadrant.pdf",width = 6, height = 4)
+# 
+# 
+# ggplot(ana[ana$Outdegree != 0,], aes(x = Stress, y = Outdegree)) +
+#   geom_point(alpha = 0.7) +
+#   theme_bw() +
+#   theme(panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank(),
+#         legend.position = "right") +
+#   scale_color_brewer(palette = 1) +
+#   geom_text_repel(aes(label = ifelse(Outdegree > 8 & Stress > 1000000, 
+#                                as.character(name), '')), hjust = 0, vjust = 1,min.segment.length = 0)
+# ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/stress_outdegree.pdf",width = 4, height = 4)
+# 
+# ggplot(ana[ana$Outdegree != 0,], aes(x = TopologicalCoefficient, y = Stress)) +
+#   geom_point(alpha = 0.7) +
+#   theme_bw() +
+#   theme(panel.grid.major = element_blank(),
+#         panel.grid.minor = element_blank(),
+#         legend.position = "right") +
+#   scale_color_brewer(palette = 1) +
+#   geom_text_repel(aes(label = ifelse(Stress > 1000000 & TopologicalCoefficient < 0.5, 
+#                                as.character(name), '')), hjust = 0, vjust = 1,min.segment.length = 0)
+# 
+# ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/stress_TC.pdf",width = 4, height = 4)
+```
+
+## GO of PA3998 PA0392
+```{r}
+GO_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_GO_list_all.csv")
+GO_list <- GO_list[GO_list$cate == "all",]
+GO_list$Count <- as.numeric(GO_list$Count)
+exp <- GO_list[GO_list$name == "PA3998" | GO_list$name == "PA0392",]
+exp <- exp[exp$Description!="oxidoreductase activity",]
+ggplot(exp, aes(x=Count, y=Description, size = frac, color = name)) +
+  geom_point(alpha=0.5) +
+  theme_bw() +
+  theme(legend.position = "right")
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/PA3998_0392_GO.pdf",width = 6, height = 4)
+```
+
+
+
+<!-- ### Assign top 2 GO term to HP functions -->
+<!-- ```{r} -->
+<!-- GO_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_GO_list_all.csv") -->
+<!-- term_list <- as.data.frame(table(GO_list$Description)) -->
+<!-- # cellular_component -->
+<!-- go_top2 <- GO_list %>% -->
+<!--   subset(Description != "ribosome") %>% -->
+<!--   subset(Description != "structural constituent of ribosome") %>% -->
+<!--   subset(Description != "translation") %>% -->
+<!--   arrange(name, desc(frac)) %>%               -->
+<!--   group_by(name) %>% -->
+<!--   slice_max(order_by = frac, n = 2, with_ties = FALSE) %>%  #  -->
+<!--   ungroup()  -->
+
+<!-- id_df <- data.frame(table(go_top2$Description)) -->
+<!-- go_top2 <- merge(go_top2, id_df, by.x="Description",by.y="Var1") -->
+
+<!-- link_df <- go_top2 %>% -->
+<!--   group_by(name) %>% -->
+<!--   summarise(ID_list = list(unique(Description)), .groups = "drop") %>% -->
+<!--   mutate(pairs = map(ID_list, ~ { -->
+<!--     x <- .x -->
+<!--     if(length(x) == 1) { -->
+<!--       # 自连接 -->
+<!--       data.frame(V1 = x, V2 = "HPs have no second GO", stringsAsFactors = FALSE) -->
+<!--     } else { -->
+<!--       # 两两组合 -->
+<!--       as.data.frame(t(combn(x, 2)), stringsAsFactors = FALSE) -->
+<!--     } -->
+<!--   })) %>% -->
+<!--   unnest(pairs) -->
+
+<!-- edges <- as.data.frame(table(as.character(link_df$V1), as.character(link_df$V2))) %>% -->
+<!--   subset(Freq > 5) -->
+<!-- sum(edges$Freq) -->
+
+<!-- pdf("/Users/lubeifang/Desktop/chord_go_all.pdf",width = 10, height=10) -->
+<!-- chordDiagram(edges, grid.col = NULL, transparency = 0.5) -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+
+<!-- ```{r} -->
+<!-- # cellular_component -->
+<!-- go_top2_cc <- go_top2[go_top2$Namespace == "cellular_component",] -->
+
+<!-- id_df <- data.frame(table(go_top2_cc$Description)) -->
+<!-- go_top2_cc <- merge(go_top2_cc, id_df, by.x="Description",by.y="Var1") -->
+
+<!-- link_df <- go_top2_cc %>% -->
+<!--   group_by(name) %>% -->
+<!--   summarise(ID_list = list(unique(Description)), .groups = "drop") %>% -->
+<!--   mutate(pairs = map(ID_list, ~ { -->
+<!--     x <- .x -->
+<!--     if(length(x) == 1) { -->
+<!--       # 自连接 -->
+<!--       data.frame(V1 = x, V2 = "HPs have no second GO in cellular component category", stringsAsFactors = FALSE) -->
+<!--     } else { -->
+<!--       # 两两组合 -->
+<!--       as.data.frame(t(combn(x, 2)), stringsAsFactors = FALSE) -->
+<!--     } -->
+<!--   })) %>% -->
+<!--   unnest(pairs) -->
+
+<!-- edges <- as.data.frame(table(as.character(link_df$V1), as.character(link_df$V2))) %>% -->
+<!--   subset(Freq >0) -->
+<!-- sum(edges$Freq) -->
+
+<!-- pdf("/Users/lubeifang/Desktop/chord_go_cc.pdf",width = 10, height=10) -->
+<!-- chordDiagram(edges, grid.col = NULL, transparency = 0.5) -->
+<!-- dev.off() -->
+
+<!-- # molecular_function -->
+<!-- go_top2_mf <- go_top2[go_top2$Namespace == "molecular_function",] -->
+
+<!-- id_df <- data.frame(table(go_top2_mf$Description)) -->
+<!-- go_top2_mf <- merge(go_top2_mf, id_df[id_df$Freq>=10,], by.x="Description",by.y="Var1") -->
+
+<!-- length(unique(go_top2_mf$name)) -->
+<!-- link_df <- go_top2_mf %>% -->
+<!--   group_by(name) %>% -->
+<!--   summarise(ID_list = list(unique(Description)), .groups = "drop") %>% -->
+<!--   mutate(pairs = map(ID_list, ~ { -->
+<!--     x <- .x -->
+<!--     if(length(x) == 1) { -->
+<!--       # 自连接 -->
+<!--       data.frame(V1 = x, V2 = "HPs have no second GO in cellular molecular function", stringsAsFactors = FALSE) -->
+<!--     } else { -->
+<!--       # 两两组合 -->
+<!--       as.data.frame(t(combn(x, 2)), stringsAsFactors = FALSE) -->
+<!--     } -->
+<!--   })) %>% -->
+<!--   unnest(pairs) -->
+
+<!-- edges <- as.data.frame(table(as.character(link_df$V1), as.character(link_df$V2))) %>% -->
+<!--   subset(Freq >0) -->
+<!-- sum(edges$Freq) -->
+
+<!-- pdf("/Users/lubeifang/Desktop/chord_go_mf.pdf",width = 10, height=10) -->
+<!-- chordDiagram(edges, grid.col = NULL, transparency = 0.5) -->
+<!-- dev.off() -->
+
+<!-- # biological_process -->
+<!-- go_top2_bp <- go_top2[go_top2$Namespace == "biological_process",] -->
+
+<!-- id_df <- data.frame(table(go_top2_bp$Description)) -->
+<!-- go_top2_bp <- merge(go_top2_bp, id_df[id_df$Freq>=10,], by.x="Description",by.y="Var1") -->
+
+<!-- link_df <- go_top2_bp %>% -->
+<!--   group_by(name) %>% -->
+<!--   summarise(ID_list = list(unique(Description)), .groups = "drop") %>% -->
+<!--   mutate(pairs = map(ID_list, ~ { -->
+<!--     x <- .x -->
+<!--     if(length(x) == 1) { -->
+<!--       # 自连接 -->
+<!--       data.frame(V1 = x, V2 = "HPs have no second GO in cellular biological process", stringsAsFactors = FALSE) -->
+<!--     } else { -->
+<!--       # 两两组合 -->
+<!--       as.data.frame(t(combn(x, 2)), stringsAsFactors = FALSE) -->
+<!--     } -->
+<!--   })) %>% -->
+<!--   unnest(pairs) -->
+<!-- edges <- as.data.frame(table(as.character(link_df$V1), as.character(link_df$V2))) %>% -->
+<!--   subset(Freq >0) -->
+<!-- sum(edges$Freq) -->
+
+<!-- pdf("/Users/lubeifang/Desktop/chord_go_bp.pdf",width = 10, height=10) -->
+<!-- chordDiagram(edges, grid.col = NULL, transparency = 0.5) -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+<!-- ## GO term relation -->
+<!-- ```{r} -->
+<!-- GO_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_GO_list.csv") -->
+<!-- GO_list <- GO_list[GO_list$cate == "all",] -->
+
+<!-- result <- GO_list %>% -->
+<!--   group_by(name) %>% -->
+<!--   filter(n_distinct(Description) > 1) %>% -->
+<!--   summarise(Category_combinations = list(combn(unique(Description), 2, simplify = FALSE)), .groups = 'drop') %>% -->
+<!--   unnest(Category_combinations) %>% -->
+<!--   # 将组合转换为字符型，便于计数 -->
+<!--   mutate(Combination = sapply(Category_combinations, paste, collapse = " + ")) -->
+
+<!-- plot <- as.data.frame(table(result$Combination)) -->
+<!-- write.csv(plot,"/Users/lubeifang/Desktop/PA_HP/files/2GOterms_relation_results.csv",row.names = F) -->
+
+<!-- # 准备chordDiagram需要的数据格式 -->
+<!-- chord_data <- data.frame(from = sapply(strsplit(as.character(plot$Var1), " \\+ "), `[`, 1),  -->
+<!--                          to = sapply(strsplit(as.character(plot$Var1), " \\+ "), `[`, 2),  -->
+<!--                          freq = plot$Freq) -->
+<!-- chord_data_f <- chord_data[chord_data$freq > 20,] -->
+
+<!-- pdf("/Users/lubeifang/Desktop/chord_goCluster_all.pdf",width = 10, height=10) -->
+<!-- chordDiagram(chord_data_f, grid.col = NULL, transparency = 0.5) -->
+<!-- dev.off() -->
+
+
+<!-- # annotate with cluster -->
+<!-- manual_go <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/manual_GO_cluster.csv") -->
+<!-- chord_data_c <- merge(chord_data, manual_go, by.x = "from", by.y = "GO", all.x = TRUE) -->
+<!-- chord_data_c <- merge(chord_data_c, manual_go, by.x = "to", by.y = "GO", all.x = TRUE) -->
+
+<!-- Virulence_Stress <- chord_data_c[(chord_data_c$Category.x == "Virulence & Pathogenesis" &  -->
+<!--                                    chord_data_c$Category.y == "Stress Response") |  -->
+<!--                                    (chord_data_c$Category.y == "Virulence & Pathogenesis" &  -->
+<!--                                    chord_data_c$Category.x == "Stress Response") ,] -->
+<!-- ``` -->
+
+
+
+
+<!-- ## Manual GO cluster  -->
+<!-- ```{r} -->
+<!-- manual_go <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/manual_GO_cluster.csv") -->
+<!-- GO_list <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_GO_list.csv") -->
+<!-- GO_list <- GO_list[GO_list$cate == "all",] %>% -->
+<!--   merge( manual_go,by.x="Description",by.y="GO") -->
+<!-- term_list <- as.data.frame(table(GO_list$Category)) -->
+
+<!-- go_plot <- merge(GO_list, term_list, by.x="Category",by.y="Var1") %>% -->
+<!--   arrange(pvalue) -->
+<!-- go_plot <- go_plot[!duplicated(go_plot[,c("Category","name")]),] -->
+
+<!-- test <- as.data.frame(table(go_plot$name)) -->
+<!-- test2 <- as.data.frame(table(go_plot$Category)) -->
+<!-- sum(test2$Freq) -->
+
+<!-- result <- go_plot %>% -->
+<!--   group_by(name) %>% -->
+<!--   # 确保每组有超过一个Category -->
+<!--   filter(n_distinct(Category) > 1) %>% -->
+<!--   # 计算每个name分组下Category的所有可能的两两组合 -->
+<!--   summarise(Category_combinations = list(combn(unique(Category), 2, simplify = FALSE)), .groups = 'drop') %>% -->
+<!--   unnest(Category_combinations) %>% -->
+<!--   # 将组合转换为字符型，便于计数 -->
+<!--   mutate(Combination = sapply(Category_combinations, paste, collapse = " + ")) -->
+
+<!-- plot <- as.data.frame(table(result$Combination)) -->
+<!-- write.csv(plot,"/Users/lubeifang/Desktop/PA_HP/files/manual_GO_cluster_results.csv",row.names = F) -->
+
+<!-- # 准备chordDiagram需要的数据格式 -->
+<!-- chord_data <- data.frame(from = sapply(strsplit(as.character(plot$Var1), " \\+ "), `[`, 1),  -->
+<!--                          to = sapply(strsplit(as.character(plot$Var1), " \\+ "), `[`, 2),  -->
+<!--                          freq = plot$Freq) -->
+
+
+<!-- pdf("/Users/lubeifang/Desktop/chord_goCluster_all.pdf",width = 10, height=10) -->
+<!-- chordDiagram(chord_data, grid.col = NULL, transparency = 0.5) -->
+<!-- dev.off() -->
+<!-- ``` -->
+
+<!-- ### example of GO -->
+<!-- ```{r} -->
+<!-- PA2151 <- go_plot[go_plot$name == "PA2151",] -->
+
+<!-- convert_to_decimal <- function(fraction) { -->
+<!--   parts <- strsplit(fraction, "/")[[1]] -->
+<!--   numerator <- as.numeric(parts[1]) -->
+<!--   denominator <- as.numeric(parts[2]) -->
+<!--   return (numerator / denominator) -->
+<!-- } -->
+
+<!-- PA2151$GeneRatio <- sapply(PA2151$GeneRatio , convert_to_decimal) -->
+<!-- # plot bubble GO -->
+<!-- ggplot(PA2151, aes(x=Count, y=log10(pvalue), size = GeneRatio, color = Category)) + -->
+<!--   geom_point(alpha=0.5) + -->
+<!--   scale_size(range = c(10, 20)) + -->
+<!--   theme_bw() + -->
+<!--   theme(legend.position = "right") + -->
+<!--   geom_text_repel(aes(label = Category), size = 2, vjust = 0,max.overlaps = 100) +  -->
+<!--   # scale_color_brewer(palette = 1) + -->
+<!--   xlim(0,25)+ -->
+<!--   ylim(-16,-2) -->
+<!-- ``` -->

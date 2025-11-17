@@ -1,0 +1,729 @@
+#Expression pattern analysis
+```{R}
+rm(list=ls())
+library(data.table)
+library(ggplot2)
+library(clusterProfiler)
+library(ggridges)
+library(reshape2)
+library(viridis)
+library(hrbrthemes)
+library(stats)
+library(ggpubr)
+
+our_m <- fread("/Users/lubeifang/Desktop/PA_HP/files/merged_counts.txt",header = T, sep="\t")
+lane <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/lane_cor.csv")
+mu <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_mu.csv")
+
+a <- as.data.frame(colnames(our_m))
+
+PAgo = read.csv("/Users/lubeifang/Desktop/BIOTOOLS/ref/PAO1gene_ontology_csv.csv",header = T)
+PAgo_term2gene <- as.data.frame(PAgo[, c(5,1)])
+PAgo_term2name <- as.data.frame(PAgo[, c(5,6)])
+
+PAanno <- read.csv("/Users/lubeifang/Desktop/BIOTOOLS/ref/PAO1_ref.csv",header = T)
+
+paper_o <- fread("/Users/lubeifang/Desktop/PA_HP/files/paper_our_final_tpm.csv",header = T)
+cols_to_remove <- grep("PA", colnames(paper_o), value = TRUE)
+paper <- paper_o[, !colnames(paper_o) %in% cols_to_remove, with = FALSE]
+cols_to_remove <- grep("lane", colnames(paper), value = TRUE)
+paper <- paper[, !colnames(paper) %in% cols_to_remove, with = FALSE]
+paper <- paper[,-1]
+
+cols_to_remove <- grep("lane", colnames(paper_o), value = TRUE)
+wt <- paper_o[, colnames(paper_o) %in% cols_to_remove, with = FALSE]
+# write.csv(colnames(paper),"/Users/lubeifang/Desktop/colname.csv",row.names = F,quote = F)
+paper_anno <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/RUN-CONDITION-Manual.csv",header = T)
+```
+
+
+## Calculate FPKM
+```{r}
+columns_to_calculate <- colnames(our_m)[c(7:ncol(our_m))]
+
+# fpkm_data <- data.frame(Geneid = our_m$Geneid)
+# for (col in columns_to_calculate) {
+#   fragments <- our_m[[col]]
+#   gene_length_kb <- our_m$Length / 1000
+#   total_fragments_million <- sum(fragments) / 1e6
+#   fpkm <- fragments / (gene_length_kb * total_fragments_million)
+#   fpkm_data[col] <- fpkm
+# }
+# 
+# write.csv(fpkm_data,"/Users/lubeifang/Desktop/PA_HP/files/938hp_FPKM.csv",row.names = F,quote = F)
+
+
+tpm_data <- data.frame(Geneid = our_m$Geneid)
+for (col in columns_to_calculate) {
+  fragments <- our_m[[col]]
+  gene_length_kb <- our_m$Length / 1000
+  rpk <- fragments / gene_length_kb
+  total_rpk <- sum(rpk)
+  tpm <- (rpk / total_rpk) * 1e6
+  tpm_data[col] <- tpm
+}
+# write.csv(tpm_data,"/Users/lubeifang/Desktop/PA_HP/files/938hp_TPM.csv",row.names = F,quote = F)
+
+```
+
+
+## Calculate mean fpkm
+```{r}
+tpm_data <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/938hp_TPM.csv")
+matrix <- data.frame(gene = tpm_data[,1])
+cor_matrix <- data.frame()
+
+for (i in unique(lane$lane)[1:22]){
+  print(i)
+  for (mu in unique(lane[lane$lane == i,]$index)){
+    print(mu)
+    mu_names <- lane[lane$lane == i & lane$index == mu,]$name
+    wt_names <- lane[lane$lane == "WT" & lane$mu == i,]$name
+    colname <- c(wt_names, mu_names)
+    if (mu_names[1] %in% colnames(tpm_data)){
+      OE <- tpm_data[,mu_names]
+      mu_name <- lane[lane$lane == i & lane$index == mu,]$mu[1]
+      mu_name <- substr(mu_name, 1, nchar(mu_name) - 2)
+      mu_name <- gsub("-1-LEL3355-", "",mu_name)
+      mu_name <- gsub("-1-LEL3355", "",mu_name)
+      mu_name <- gsub("-2-LEC9234", "",mu_name)
+      
+      temp <- data.frame(counts = (OE[,1] + OE[,2])/2)
+      colnames(temp) <- mu_name
+      matrix <- cbind(matrix,temp)
+      
+      # cor <- cor(log2(OE[,1]+1),log2(OE[,2]+1),method = "pearson")
+      cor <- cor(OE[,1],OE[,2],method = "pearson")
+      cor_matrix <- rbind(cor_matrix,data.frame(mu = mu_name,cor = cor))
+    }
+  }
+}
+# write.csv(matrix,"/Users/lubeifang/Desktop/PA_HP/files/our_meanTPM.csv",row.names = F,quote = F)
+```
+
+
+### cor density
+```{r}
+matrix <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/our_meanTPM.csv")
+
+ggplot(cor_matrix,aes(x=cor))+
+  geom_density(fill = "steelblue", alpha = 0.8)+
+  geom_boxplot(aes(y=0),width = 0.5,fill = "grey", size = 0.4)+
+  theme_bw() +
+  xlim(0.5,1) +
+  ylab("Density") +
+  xlab("Pearson correlation between replicates")
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/cor_rep.pdf",width = 4,height = 4)
+
+summary(cor_matrix$cor)
+```
+
+
+## EXP heatmap
+```{r}
+library(pheatmap)
+exp_matrix <- matrix[,-1]
+rownames(exp_matrix) <- matrix[,1]
+
+pheatmap_result <- pheatmap(log2(exp_matrix+1),
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         show_rownames = F,
+         show_colnames = F,
+         height = 5,
+         width=5,
+         legend = T,
+         filename = "/Users/lubeifang/Desktop/test.pdf")
+# # cluster into 5 clusters
+# row_clusters <- cutree(pheatmap_result$tree_row, k = 8)
+# table(row_clusters)
+# annotation_row <- data.frame(Cluster = factor(row_clusters))
+# rownames(annotation_row) <- rownames(exp_matrix)
+
+# cluster into 4 clusters
+col_clusters <- cutree(pheatmap_result$tree_col, k = 2)
+table(col_clusters)
+annotation_col <- data.frame(Cluster = factor(col_clusters))
+rownames(annotation_col) <- colnames(exp_matrix)
+# write.csv(annotation_col,"/Users/lubeifang/Desktop/PA_HP/files/mutant_exp_col_cluster.csv",row.names = T,quote = F)
+table(annotation_col$Cluster)
+
+pheatmap(log2(exp_matrix+1), 
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         show_rownames = F,
+         show_colnames = F,
+         height = 4,
+         width=5,
+         legend = T,
+         # annotation_row = annotation_row,
+         annotation_col = annotation_col,
+         filename = "/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/exp_heatmap.pdf")
+```
+
+
+### paper & WT
+```{R}
+log_all <- cbind(log,
+             log_paper,
+             log_wt)
+annotation_col <- data.frame(
+  Group = c(rep("HP",938),rep("Paper",566),rep("WT",44)) # 每组对应5列
+)
+rownames(annotation_col) <- colnames(log_all)
+
+pheatmap(log_all, 
+         clustering_distance_rows = "euclidean",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         show_rownames = F,
+         show_colnames = F,
+         height = 4,
+         width=5,
+         legend = T,
+         annotation_col = annotation_col,
+         filename = "/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/exp_heatmap_all.pdf")
+)
+
+```
+
+
+## Consistant low and high genes
+### prep
+```{r}
+paper_m <- as.data.frame(paper)
+rownames(paper_m) <- paper_m[, 1]
+paper_m <- paper_m[, -1]
+log_paper <- log2(paper_m+1)
+
+
+log <- log2(exp_matrix+1)
+
+
+wt_m <- as.data.frame(wt)
+rownames(wt_m) <- rownames(paper_m)
+log_wt <- log2(wt_m+1)
+```
+
+### low exp1
+```{r}
+# 95% conditions have value below 1
+rows_with_below_1 <- rownames(log)[apply(log, 1, function(x) mean(x < 2) >= 0.99)]
+
+GO <- enricher(rows_with_below_1,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.01)
+pdf("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/low_exp_go1.pdf",width = 6,height = 4)
+dotplot(GO)
+dev.off()
+
+HPs <- merge(data.frame(HP2080=rows_with_below_1), mu,by="HP2080")
+
+# whether they are high in WT condition
+low_in_wt <- log_wt[rows_with_below_1,]
+high_in_wt <- rownames(low_in_wt)[apply(low_in_wt, 1, function(x) mean(x > 1) >= 0.2)]
+
+low_in_paper <- log_paper[rows_with_below_1,]
+high_in_paper <- rownames(low_in_paper)[apply(low_in_paper, 1, function(x) mean(x > 1) >= 0.2)]
+
+data <- rbind(data.frame(type="low_in_mutant",as.data.frame(t(log[rows_with_below_1,]))),
+              data.frame(type="low_in_wt",as.data.frame(t(log_wt[rows_with_below_1,]))),
+              data.frame(type="low_in_paper",as.data.frame(t(log_paper[rows_with_below_1,]))))
+data$condition <- rownames(data)
+data <- melt(data, id.vars = c("type", "condition"), variable.name = "gene", value.name = "value")
+
+ggplot(data, aes(x = gene, y = value, fill = type)) +
+  geom_violin(alpha = 1, color = NA) +
+  geom_boxplot(alpha = 0.6, outlier.shape = NA, position = position_dodge(width = 1)) +
+  # geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = c("low_in_mutant" = "lightblue", "low_in_wt" = "orange", "low_in_paper" = "darkgreen")) +
+  scale_color_manual(values = c("low_in_mutant" = "lightblue", "low_in_wt" = "orange", "low_in_paper" = "darkgreen")) +
+  # facet_wrap(~ type, ncol = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Expression Levels of Low Expression Genes",
+       x = "Genes",
+       y = "Log2(TPM + 1)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type"))
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/low_exp_boxplot1.pdf",width = 10,height = 4)
+```
+
+### low exp2
+```{r}
+# 98% conditions have value below 3
+rows_with_below_3 <- rownames(log)[apply(log, 1, function(x) mean(x < 3) >= 0.99)]
+
+rows_with_below <- rows_with_below_3[!rows_with_below_3 %in% rows_with_below_1]
+GO <- enricher(rows_with_below,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.01)
+pdf("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/low_exp_go2.pdf",width = 6,height = 4)
+dotplot(GO)
+dev.off()
+
+HPs <- merge(data.frame(HP2080=rows_with_below_3), mu,by="HP2080")
+
+# whether they are high in WT condition
+low_in_wt <- log_wt[rows_with_below_3,]
+high_in_wt <- rownames(low_in_wt)[apply(low_in_wt, 1, function(x) mean(x > 3) >= 0.2)]
+
+low_in_paper <- log_paper[rows_with_below_3,]
+high_in_paper <- rownames(low_in_paper)[apply(low_in_paper, 1, function(x) mean(x > 3) >= 0.2)]
+
+data <- rbind(data.frame(type="low_in_mutant",as.data.frame(t(log[rows_with_below_3,]))),
+              data.frame(type="low_in_wt",as.data.frame(t(log_wt[rows_with_below_3,]))),
+              data.frame(type="low_in_paper",as.data.frame(t(log_paper[rows_with_below_3,]))))
+data$condition <- rownames(data)
+data <- melt(data, id.vars = c("type", "condition"), variable.name = "gene", value.name = "value")
+
+data <- data[data$gene %in% c("PA1531","PA1918","PA1923","PA2091","PA2315"),]
+ggplot(data, aes(x = gene, y = value, fill = type)) +
+  geom_violin(alpha = 1, color = NA) +
+  geom_boxplot(outlier.shape = NA, position = position_dodge(width = 0.7), alpha = 0.8) +
+  # geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = c("low_in_mutant" = "lightblue", "low_in_wt" = "orange", "low_in_paper" = "darkgreen")) +
+  scale_color_manual(values = c("low_in_mutant" = "lightblue", "low_in_wt" = "orange", "low_in_paper" = "darkgreen")) +
+  # facet_wrap(~ type, ncol = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Expression Levels of Low Expression Genes",
+       x = "Genes",
+       y = "Log2(TPM + 1)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type"))
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/low_exp_boxplot2_HP.pdf",width = 4.5,height = 3)
+```
+### high exp1
+```{r}
+# 95% conditions have value below 1
+rows_with_above_10 <- rownames(log)[apply(log, 1, function(x) mean(x > 10) >= 0.95)]
+
+GO <- enricher(rows_with_above_10,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.01)
+pdf("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/high_exp_go1.pdf",width = 6,height = 4)
+dotplot(GO)
+dev.off()
+
+HPs <- merge(data.frame(HP2080=rows_with_above_10), mu,by="HP2080")
+anno <- merge(data.frame(Locus.Tag=rows_with_above_10), PAanno, by="Locus.Tag")
+# whether they are high in WT condition
+high_in_wt <- log_wt[rows_with_above_10,]
+low_in_wt <- rownames(high_in_wt)[apply(high_in_wt, 1, function(x) mean(x < 10) >= 0.2)]
+
+low_in_paper <- log_paper[rows_with_below_1,]
+high_in_paper <- rownames(low_in_paper)[apply(low_in_paper, 1, function(x) mean(x > 1) >= 0.2)]
+
+data <- rbind(data.frame(type="low_in_mutant",as.data.frame(t(log[rows_with_above_10,]))),
+              data.frame(type="low_in_wt",as.data.frame(t(log_wt[rows_with_above_10,]))),
+              data.frame(type="low_in_paper",as.data.frame(t(log_paper[rows_with_above_10,]))))
+data$condition <- rownames(data)
+data <- melt(data, id.vars = c("type", "condition"), variable.name = "gene", value.name = "value")
+
+data <- data[!data$gene %in% HPs$HP2080,]
+ggplot(data, aes(x = gene, y = value, fill = type)) +
+  # geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  geom_violin(alpha = 1, color = NA)+
+  geom_boxplot(alpha = 0.6, outlier.shape = NA, position = position_dodge(width = 0.7), alpha = 0.8) +
+  scale_fill_manual(values = c("low_in_mutant" = "lightblue", "low_in_wt" = "orange", "low_in_paper" = "darkgreen")) +
+  scale_color_manual(values = c("low_in_mutant" = "lightblue", "low_in_wt" = "orange", "low_in_paper" = "darkgreen")) +
+  # facet_wrap(~ type, ncol = 1) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Expression Levels of High Expression Genes",
+       x = "Genes",
+       y = "Log2(TPM + 1)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type"))
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/high_exp_boxplot.pdf",width = 10,height = 3)
+```
+
+
+### variance
+```{r}
+var <- data.frame(gene = our_m$Geneid,
+                 sd = apply(log, 1, var),
+                 sd_wt = apply(log_wt, 1, var),
+                 sd_paper = apply(log_paper, 1, var))
+var <- reshape2::melt(var, id.vars = "gene", variable.name = "type", value.name = "sd")
+ggplot(var, aes(x = type, y = sd, fill = type)) +
+  geom_violin(alpha = 1, width = 1, color = NA) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.6, width = 0.6) +
+  # geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  scale_color_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Variance of Gene Expression Levels",
+       x = "Type",
+       y = "Variance (SD)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type")) +
+  stat_compare_means(comparisons = list(c("sd", "sd_wt"), c("sd", "sd_paper"), c("sd_wt", "sd_paper")),label = "p.format", method = "wilcox.test")
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/variance_box.pdf",width = 4,height = 4)
+
+```
+
+#### top variable
+```{r}
+top30 <- var[var$type == "sd",][order(-var$sd),][1:30,]$gene
+top <- var[var$gene %in% top30,]
+ggplot(top, aes(x = type, y = sd, fill = type)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+  geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  scale_color_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Variance of Gene Expression Levels",
+       x = "Type",
+       y = "Variance (SD)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type")) +
+  stat_compare_means(comparisons = list(c("sd", "sd_wt"), c("sd", "sd_paper"), c("sd_wt", "sd_paper")),label = "p.format", method = "wilcox.test")
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/var_boxplot_top30.pdf",width = 4,height = 4)
+
+
+top30_HP <- intersect(top30, mu$HP2080)
+top30_anno <- merge(data.frame(Locus.Tag=top30), PAanno, by="Locus.Tag")
+GO <- enricher(top30,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.05)
+dotplot(GO)
+
+
+## exclude tRNA
+var <- merge(var, PAanno[,c(1,2,3)], by.x="gene", by.y="Locus.Tag", all.x = T)
+var_no_tRNA <- var[var$Feature.Type == "CDS",]
+
+top30_no_tRNA <- var_no_tRNA[var_no_tRNA$type == "sd",] %>%
+  arrange(-sd) %>%
+  head(30) %>%
+  pull(gene)
+top30_HP <- intersect(top30_no_tRNA, mu$HP2080)
+top30_anno <- merge(data.frame(Locus.Tag=top30_no_tRNA), PAanno, by="Locus.Tag")
+GO <- enricher(top30_no_tRNA,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.05)
+GO_result <- data.frame(name = "top30", as.data.frame(GO))
+dotplot(GO)
+
+top <- var[var$gene %in% top30_no_tRNA,]
+ggplot(top, aes(x = type, y = sd, fill = type)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+  geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  scale_color_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Variance of Gene Expression Levels",
+       x = "Type",
+       y = "Variance (SD)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type")) +
+  stat_compare_means(comparisons = list(c("sd", "sd_wt"), c("sd", "sd_paper"), c("sd_wt", "sd_paper")),label = "p.format", method = "wilcox.test")
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/var_boxplot_top30_CDS.pdf",width = 4,height = 4)
+
+
+ggplot(top, aes(x = gene, y = sd, fill = type)) +
+  geom_bar(stat = 'identity',alpha=0.5) +
+  scale_fill_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Top 30 gene variances",
+       x = "Genes",
+       y = "Variance") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type"))
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/high_vat_bar.pdf",width = 10,height = 4)
+```
+
+#### less variable
+```{r}
+less30 <- var[var$type == "sd",] %>%
+  arrange(sd) %>%
+  head(30) %>%
+  pull(gene)
+less <- var[var$gene %in% less30,]
+ggplot(less, aes(x = type, y = sd, fill = type)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+  geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  scale_color_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Variance of Gene Expression Levels",
+       x = "Type",
+       y = "Variance (SD)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type")) +
+  stat_compare_means(comparisons = list(c("sd", "sd_wt"), c("sd", "sd_paper"), c("sd_wt", "sd_paper")),label = "p.format", method = "wilcox.test")
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/var_boxplot_less30.pdf",width = 4,height = 4)
+
+
+less30_HP <- intersect(less30, mu$HP2080)
+less30_anno <- merge(data.frame(Locus.Tag=less30), PAanno, by="Locus.Tag")
+GO <- enricher(less30,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.05)
+dotplot(GO)
+
+
+## exclude tRNA
+var <- merge(var, PAanno[,c(1,2,3)], by.x="gene", by.y="Locus.Tag", all.x = T)
+var_no_tRNA <- var[var$Feature.Type == "CDS",]
+
+less30_no_tRNA <- var_no_tRNA[var_no_tRNA$type == "sd",] %>%
+  arrange(sd) %>%
+  head(30) %>%
+  pull(gene)
+less30_HP <- intersect(less30_no_tRNA, mu$HP2080)
+less30_anno <- merge(data.frame(Locus.Tag=less30_no_tRNA), PAanno, by="Locus.Tag")
+GO <- enricher(less30_no_tRNA,
+               TERM2GENE = PAgo_term2gene,
+               TERM2NAME = PAgo_term2name,
+               pvalueCutoff = 0.05)
+dotplot(GO)
+GO_result <- rbind(GO_result,data.frame(name = "less30", as.data.frame(GO)))
+
+less <- var[var$gene %in% less30_no_tRNA,]
+ggplot(less, aes(x = type, y = sd, fill = type)) +
+  geom_boxplot(outlier.shape = NA, alpha = 0.8) +
+  geom_jitter(aes(color = type), position = position_jitterdodge(jitter.width = 0.2, dodge.width = 0.75), size = 0.5, alpha = 0.5) +
+  scale_fill_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  scale_color_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Variance of Gene Expression Levels",
+       x = "Type",
+       y = "Variance (SD)") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type")) +
+  stat_compare_means(comparisons = list(c("sd", "sd_wt"), c("sd", "sd_paper"), c("sd_wt", "sd_paper")),label = "p.format", method = "wilcox.test")
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/var_boxplot_less30_CDS.pdf",width = 4,height = 4)
+
+ggplot(less, aes(x = gene, y = sd, fill = type)) +
+  geom_bar(stat = 'identity', alpha=0.5) +
+  scale_fill_manual(values = c("sd" = "lightblue", "sd_wt" = "orange", "sd_paper" = "darkgreen")) +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        # panel.grid = element_blank(),
+        ) +
+  labs(title = "Less 30 gene variances",
+       x = "Genes",
+       y = "Variance") +
+  guides(fill = guide_legend(title = "Type"), color = guide_legend(title = "Type"))
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/low_vat_bar.pdf",width = 10,height = 4)
+```
+
+####GO plot
+```{r}
+ggplot(GO_result, aes(size=Count, y=Description, x = log10(pvalue), color = name)) +
+  geom_point(alpha=0.5) +
+  theme_bw() +
+  theme(legend.position = "right")
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/var_go_dotplot.pdf",width = 6,height = 3)
+
+less30 <- var_no_tRNA[var_no_tRNA$type == "sd",] %>%
+  arrange(sd) %>%
+  head(30)
+less30_anno <- merge(less30, PAanno, by.x="gene", by.y="Locus.Tag")
+top30 <- var_no_tRNA[var_no_tRNA$type == "sd",] %>%
+  arrange(-sd) %>%
+  head(30)
+top30_anno <- merge(top30, PAanno, by.x="gene", by.y="Locus.Tag")
+
+genes <- rbind(data.frame(type="less_variable", less30),
+               data.frame(type="top_variable", top30)) 
+genes <- genes[grepl("phz", genes$Gene.Name.x, ignore.case = TRUE), ]
+
+ggplot(genes, aes(x = reorder(Gene.Name.x, sd), y = sd, fill = type)) +
+  geom_bar(stat = "identity", position = "dodge", alpha=0.5) +
+  coord_flip() +
+  # scale_fill_manual(values = c("less_variable" = "lightblue", "top_variable" = "orange")) +
+  theme_bw() +
+  theme(panel.grid = element_blank()) +
+  labs(title = "Variance of phz Genes",
+       x = "Gene",
+       y = "Variance (SD)") +
+  guides(fill = guide_legend(title = "Type")) +
+  geom_text(aes(label=round(sd,2)), position=position_dodge(width=0.9), hjust=-0.1, size=3)
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/var_phz_barplot.pdf",width = 4,height = 3)
+```
+
+## Fit distribution
+### By mutant(col)
+```{R}
+fit_df <- data.frame()
+library(fitdistrplus)
+
+for (col in colnames(exp_matrix)) {
+  data <- exp_matrix[, col]
+  data_0 <- data
+  data <- data[data > 0]
+  
+  # 定义一个安全拟合函数，发生错误时返回 NULL
+  safe_fit <- function(data, dist) {
+    tryCatch(
+      fitdist(data, dist),
+      error = function(e) NULL  # 如果拟合失败，返回 NULL
+    )
+  }
+  
+  # 安全拟合分布
+  fit_norm <- safe_fit(data_0, "norm")    # 正态分布
+  fit_exp <- safe_fit(data, "exp")       # 指数分布
+  fit_lnorm <- safe_fit(data, "lnorm")   # 对数正态分布
+  fit_weibull <- safe_fit(data, "weibull") # 协马分布
+  fit_cauchy <- safe_fit(data_0, "cauchy") # 柯西分布
+  fit_gamma <- safe_fit(data, "gamma")   # 伽马分布
+  
+  # 从拟合对象中提取 AIC，如果拟合失败则为 NA
+  fit_df <- rbind(fit_df, data.frame(
+    Sample = col,
+    norm_aic = if (!is.null(fit_norm)) fit_norm$aic else NA,
+    exp_aic = if (!is.null(fit_exp)) fit_exp$aic else NA,
+    lnorm_aic = if (!is.null(fit_lnorm)) fit_lnorm$aic else NA,
+    weibull_aic = if (!is.null(fit_weibull)) fit_weibull$aic else NA,
+    cauchy_aic = if (!is.null(fit_cauchy)) fit_cauchy$aic else NA,
+    gamma_aic = if (!is.null(fit_gamma)) fit_gamma$aic else NA
+  ))
+}
+
+# plot
+library(reshape2)
+melted_fit_df <- melt(fit_df, id.vars = "Sample", variable.name = "Distribution", value.name = "AIC")
+ggplot(melted_fit_df, aes(x = AIC, y = Distribution, fill = Distribution)) +
+  geom_density_ridges() +
+  geom_boxplot(aes(y = Distribution), width = 0.2, fill = "grey", size = 0.4, outlier.shape = NA, alpha=0.4,color="grey") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "AIC Values for Different Distributions of Expression Data",
+       x = "AIC Value",
+       y = "") +
+  scale_fill_brewer(palette = "Set3")
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/exp_fit.pdf",width = 6,height = 4)
+table(melted_fit_df[!is.na(melted_fit_df$AIC),]$Distribution)
+```
+
+### By gene(row)
+```{R}
+fit_df <- data.frame()
+for (row in rownames(exp_matrix)) {
+  data <- exp_matrix[row,]
+  data_0 <- data
+  data <- data[data > 0]
+  
+  # 定义一个安全拟合函数，发生错误时返回 NULL
+  safe_fit <- function(data, dist) {
+    tryCatch(
+      fitdist(data, dist),
+      error = function(e) NULL  # 如果拟合失败，返回 NULL
+    )
+  }
+  
+  # 安全拟合分布
+  # fit_norm <- safe_fit(data_0, "norm")    # 正态分布
+  fit_exp <- safe_fit(data, "exp")       # 指数分布
+  fit_lnorm <- safe_fit(data, "lnorm")   # 对数正态分布
+  fit_weibull <- safe_fit(data, "weibull") # 协马分布
+  # fit_cauchy <- safe_fit(data_0, "cauchy") # 柯西分布
+  fit_gamma <- safe_fit(data, "gamma")   # 伽马分布
+  
+  # 从拟合对象中提取 AIC，如果拟合失败则为 NA
+  fit_df <- rbind(fit_df, data.frame(
+    Sample = col,
+    norm_aic = if (!is.null(fit_norm)) fit_norm$aic else NA,
+    exp_aic = if (!is.null(fit_exp)) fit_exp$aic else NA,
+    lnorm_aic = if (!is.null(fit_lnorm)) fit_lnorm$aic else NA,
+    weibull_aic = if (!is.null(fit_weibull)) fit_weibull$aic else NA,
+    cauchy_aic = if (!is.null(fit_cauchy)) fit_cauchy$aic else NA,
+    gamma_aic = if (!is.null(fit_gamma)) fit_gamma$aic else NA
+  ))
+}
+
+# plot
+library(reshape2)
+melted_fit_df <- melt(fit_df, id.vars = "Sample", variable.name = "Distribution", value.name = "AIC")
+ggplot(melted_fit_df, aes(x = AIC, y = Distribution, fill = Distribution)) +
+  geom_density_ridges() +
+  geom_boxplot(aes(y = Distribution), width = 0.2, fill = "grey", size = 0.4, outlier.shape = NA, alpha=0.4,color="grey") +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  labs(title = "AIC Values for Different Distributions of Expression Data",
+       x = "AIC Value",
+       y = "") +
+  scale_fill_brewer(palette = "Set3")
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/gene_fit.pdf",width = 6,height = 4)
+table(melted_fit_df[!is.na(melted_fit_df$AIC),]$Distribution)
+```
+
+```{r}
+sorted_data <- apply(log, 2, sort, decreasing = TRUE)
+sorted_data <- as.data.frame(sorted_data)
+sorted_data$index <- 1:nrow(sorted_data)
+long_data <- melt(sorted_data, value.name = "value", id.vars = "index")
+
+ggplot(long_data, aes(x = value, y = variable)) +
+  geom_density_ridges() +
+  scale_fill_gradientn(colors = c("purple", "orange", "yellow")) +
+  theme_ridges() +
+  labs(
+    title = "Column-wise Sorted Distribution",
+    x = "Values",
+    y = "Columns"
+  )
+ggsave("/Users/lubeifang/Desktop/PA_HP/figures/F3_exp/exp_density.pdf",width = 6,height = 20)
+
+
+# library(nortest)
+# nd_df <- data.frame()
+# for (col in colnames(log)) {
+#   p_value <- ad.test(log[, col])$p.value
+#   s <- ad.test(log[, col])$statistic[[1]]
+#   nd_df <- rbind(nd_df, data.frame(Sample = col, statistic = s, p_value = p_value))
+# }
+
+fit_df <- data.frame()
+library(fitdistrplus)
+for (col in colnames(exp_matrix)) {
+  data <- exp_matrix[, col]
+  data_0 <- data
+  data <- data[data > 0]
+  fit_norm <- fitdist(data_0, "norm")    # 正态分布
+  fit_exp <- fitdist(data, "exp")     # 指数分布
+  fit_lnorm <- fitdist(data, "lnorm") # 对数正态分布
+  fit_weibull <- fitdist(data, "weibull") # 伽马分布
+  fit_cauchy <- fitdist(data_0, "cauchy") # 柯西分布
+  fit_df <- rbind(fit_df, data.frame(Sample = col,
+                                     norm_aic = fit_norm$aic,
+                                     exp_aic = fit_exp$aic,
+                                     lnorm_aic = fit_lnorm$aic,
+                                     weibull_aic = fit_weibull$aic,
+                                     cauchy_aic = fit_cauchy$aic))
+}
+```

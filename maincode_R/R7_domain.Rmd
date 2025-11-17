@@ -1,0 +1,37 @@
+# HP domain
+```{R}
+library(dplyr)
+rm(list=ls())
+
+
+domain <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/domain_results.csv")
+domain <- domain[domain$Evalue != 0,]
+
+table(domain$File)
+length(unique(domain$File))
+table(domain$Domain)
+length(unique(domain$Domain))
+
+ggplot(domain, aes(x=Domain, y=-log10(Evalue), color=File)) +
+  geom_point() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  labs(title="Domain E-value Distribution", x="Domain", y="-log10(E-value)") +
+  scale_color_discrete(name="File") +
+  geom_text(aes(label=ifelse(-log10(Evalue) > 3, as.character(File), '')),
+            hjust=0, vjust=0, size=3, check_overlap = TRUE)
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/domain_Evalue_distribution.pdf", width=16, height=6)
+
+ggplot(domain, aes(x=File, y=-log10(Evalue), color=Domain)) +
+  geom_point() +
+  theme_bw() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "none") +
+  labs(title="HP E-value Distribution", x="HP", y="-log10(E-value)") +
+  scale_color_discrete(name="File") +
+  geom_text(aes(label=ifelse(-log10(Evalue) > 3, as.character(Domain), '')),
+            hjust=0, vjust=0, size=3, check_overlap = TRUE)
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F1_deg/HP_Evalue_distribution.pdf", width=16, height=6)
+```
+    

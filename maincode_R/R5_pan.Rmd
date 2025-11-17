@@ -1,0 +1,601 @@
+# Pan-genome
+```{r}
+rm(list=ls())
+library(data.table)
+library(dplyr)
+
+roary = fread("/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/gene_presence_absence.csv")
+colnames(roary)
+roary_PAO1 <- cbind(roary[,c(1:14)],roary[,c('PAO1')])
+roary_PAO1 <- roary_PAO1[roary_PAO1$PAO1 != "",]
+roary_PAO1$PAO1_2 <- sapply(strsplit(roary_PAO1$PAO1, "\t"), `[`, 2)
+roary_PAO1$PAO1_3 <- sapply(strsplit(roary_PAO1$PAO1, "\t"), `[`, 3)
+roary_PAO1$PAO1_4 <- sapply(strsplit(roary_PAO1$PAO1, "\t"), `[`, 4)
+roary_PAO1$PAO1 <- sapply(strsplit(roary_PAO1$PAO1, "\t"), `[`, 1)
+
+roary_PAO1 <- bind_rows(
+  roary_PAO1[, 1:15],
+  data.frame(as.data.frame(roary_PAO1[roary_PAO1$PAO1_2 != "", ][, 1:14]), PAO1 = roary_PAO1[roary_PAO1$PAO1_2 != "", ]$PAO1_2),
+  data.frame(as.data.frame(roary_PAO1[roary_PAO1$PAO1_3 != "", ][, 1:14]), PAO1 = roary_PAO1[roary_PAO1$PAO1_3 != "", ]$PAO1_3),
+  data.frame(as.data.frame(roary_PAO1[roary_PAO1$PAO1_4 != "", ][, 1:14]), PAO1 = roary_PAO1[roary_PAO1$PAO1_4 != "", ]$PAO1_4)
+)
+
+                    
+fixed <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/PAO1.gff", sep = "\t",header = F,skip=9)
+fixed <- fixed[fixed$V3 == 'CDS',]
+fixed$ID <- sapply(strsplit(fixed$V9, ";"), `[`, 1)
+fixed$ID <- sapply(strsplit(fixed$ID, "="), `[`, 2)
+fixed$Gene <- sapply(strsplit(fixed$V9, ";"), `[`, 3)
+fixed$Gene <- sapply(strsplit(fixed$Gene, "="), `[`, 2)
+# write.csv(fixed[,c(10,12)],"/Users/lubeifang/Desktop//hvkp4_fixed_genes.csv",row.names = F)
+
+HP <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_mu.csv")
+colnames(HP)[2] <- "Gene"
+anti_join(HP,fixed, by="Gene") #PA1414 is not contained in pan
+
+roary_PAO1 <- merge(roary_PAO1,fixed[,c(10,11)],by.x="PAO1",by.y="ID",all.x=T)
+roary_PAO1$freq <- roary_PAO1$`No. isolates`/(1309-14)
+roary_PAO1 <- roary_PAO1 %>%
+  mutate(category = case_when(
+    freq >= 0.99 ~ "core",
+    freq >= 0.95 ~ "soft_core",
+    freq >= 0.15 ~ "shell",
+    TRUE ~ "cloud"
+  ))
+# write.csv(roary_PAO1,"/Users/lubeifang/Desktop/PA_HP/files/roary_PAO1.csv",row.names = F)
+```
+
+
+```{r}
+roary_PAO1 <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/roary_PAO1.csv")
+HP_roary <- merge(HP,roary_PAO1, by.x="Gene",by.y="Gene.y")
+HP_roary <- distinct(HP_roary, Gene, .keep_all=TRUE)
+setdiff(HP$Gene,HP_roary$Gene)
+setdiff(HP_roary$Gene,HP$Gene)
+# writeLines(HP_roary$Gene.x,"/Users/lubeifang/Desktop/HP.txt")
+
+# HP_roary$freq <- HP_roary$`No. isolates`/(1309-14)
+HP_roary <- HP_roary %>%
+  mutate(category = case_when(
+    freq >= 0.99 ~ "core",
+    freq >= 0.95 ~ "soft_core",
+    freq >= 0.15 ~ "shell",
+    TRUE ~ "cloud"
+  ))
+table(HP_roary$category)
+summary(HP_roary$freq)
+# write.csv(HP_roary,"/Users/lubeifang/Desktop/PA_HP/files/HP_in_pan.csv",row.names = F)
+ggplot(HP_roary, aes(x=`No. isolates`, fill=category)) +
+  geom_density(linewidth = 0.2) +
+  theme_bw() +
+  scale_fill_brewer(palette = "Set3") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+# ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/HP_density.pdf",width = 6,height = 4)
+
+colnames(roary_PAO1)[27] <- "Gene"
+othergene_roary <- anti_join(roary_PAO1,HP,by="Gene")
+othergene_roary <- distinct(othergene_roary, Gene, .keep_all=TRUE)
+
+# othergene_roary$freq <- othergene_roary$`No. isolates`/(1309-14)
+othergene_roary <- othergene_roary %>%
+  mutate(category = case_when(
+    freq >= 0.99 ~ "core",
+    freq >= 0.95 ~ "soft_core",
+    freq >= 0.15 ~ "shell",
+    TRUE ~ "cloud"
+  ))
+table(othergene_roary$category)
+ggplot(othergene_roary, aes(x=`No. isolates`, fill=category)) +
+  geom_density(linewidth = 0.2) +
+  theme_bw() +
+  scale_fill_brewer(palette = "Set3") +
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/othergene_density.pdf",width = 6,height = 4)
+
+df<-rbind(data.frame(cate = "HP",
+                         freq = HP_roary$freq),
+               data.frame(cate = "other_genes",
+                         freq = othergene_roary$freq))
+library(ggplot2)
+library(ggpubr)
+ggplot(df, aes(x=cate,y=freq,fill=cate)) +
+  geom_violin(color=NA,width=0.5) +
+  geom_boxplot(width = 0.1, outliers = F) +
+  theme_bw() +
+  scale_fill_brewer(palette = 1) +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  stat_compare_means(comparisons = list(c("HP", "other_genes")),
+                     label = "p.format", label.y = c(1.1)) 
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/HP_vs_othergene_freq.pdf",width = 3,height = 3.5)
+```
+
+## plot
+```{r}
+pie <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/summary_statistics.txt",sep="\t", header = F)
+pie$percent <- round(pie$V3 / sum(pie$V3) * 100, 2)
+
+library(ggplot2)
+library(ggrepel)
+ggplot(pie[-5,], aes(x = "", y = V3, fill = V1)) +
+  geom_bar(stat = "identity", width = 1, color = "white") + 
+  coord_polar(theta = "y") + 
+  theme_void() + 
+  labs(fill = "Gene Categories") + 
+  geom_text_repel(aes(label = paste0(V1, "\n", percent, "%")), 
+            position = position_stack(vjust = 0.5), size = 4,min.segment.length = 0) + 
+  scale_fill_brewer(palette = "Set3")
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/pan_genome_pie.pdf",width = 6,height = 5)
+
+
+
+conserved = colMeans(read.table("/Users/lubeifang/Desktop/Kleb_dap/files/number_of_conserved_genes.Rtab"))
+total = colMeans(read.table("/Users/lubeifang/Desktop/Kleb_dap/files/number_of_genes_in_pan_genome.Rtab"))
+
+genes = data.frame( genes_to_genomes = c(conserved,total),
+                    genomes = c(c(1:length(conserved)),c(1:length(conserved))),
+                    Key = c(rep("Conserved genes",length(conserved)), rep("Total genes",length(total))) )
+                    
+ggplot(data = genes, aes(x = genomes, y = genes_to_genomes, group = Key, linetype=Key)) +geom_line()+
+theme_classic() +
+ylim(c(1,max(total)))+
+xlim(c(1,length(total)))+
+xlab("No. of genomes") +
+ylab("No. of genes")+ theme_bw(base_size = 16) +  theme(legend.justification=c(0,1),legend.position=c(0,1))
+ggsave("/Users/lubeifang/Desktop/Kleb_dap/Figure/Figure6/conserved_vs_total_genes.pdf", scale=1)
+
+######################
+
+unique_genes = colMeans(read.table("/Users/lubeifang/Desktop/Kleb_dap/files/number_of_unique_genes.Rtab"))
+new_genes = colMeans(read.table("/Users/lubeifang/Desktop/Kleb_dap/files/number_of_new_genes.Rtab"))
+
+genes = data.frame( genes_to_genomes = c(unique_genes,new_genes),
+                    genomes = c(c(1:length(unique_genes)),c(1:length(unique_genes))),
+                    Key = c(rep("Unique genes",length(unique_genes)), rep("New genes",length(new_genes))) )
+                    
+ggplot(data = genes, aes(x = genomes, y = genes_to_genomes, group = Key, linetype=Key)) +geom_line()+
+theme_classic() +
+ylim(c(1,max(unique_genes)))+
+xlim(c(1,length(unique_genes)))+
+xlab("No. of genomes") +
+ylab("No. of genes")+ theme_bw(base_size = 16) +  theme(legend.justification=c(1,1),legend.position=c(1,1))
+ggsave("/Users/lubeifang/Desktop/Kleb_dap/Figure/Figure6/unique_vs_new_genes.pdf", scale=1)
+```
+
+
+# compare gene list 
+
+## modules
+```{r}
+roary_PAO1 <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/roary_PAO1.csv")
+HP_roary <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_in_pan.csv")
+module <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/ICA_regu modu_HP_corr04_list.csv")
+
+t_results <- data.frame()
+for (i in colnames(module)){
+  print(i)
+  group1 <- HP_roary$freq
+  group1 <- group1[!is.na(group1)]
+  group2 <- roary_PAO1[roary_PAO1$Gene.y %in% module[,i],]$freq
+  group2 <- group2[!is.na(group2)]
+  if (length(group2) < 2) {next}
+  t.test(group1, group2)
+  t_results <- rbind(t_results,
+                      data.frame(module = i,
+                                 mean_HP = mean(group1),
+                                 mean_module = mean(group2),
+                                 p_value = t.test(group1, group2)$p.value))
+}
+
+sig <- t_results[t_results$p_value < 0.001,]
+
+ggplot(t_results, aes(x=-log10(p_value),y=mean_module,color=module)) +
+  geom_point(alpha = 0.4) +
+  theme_bw() +
+  geom_hline(yintercept = 0.8764978, color = "pink") +
+  geom_text_repel(data = sig, aes(x=-log10(p_value),y=mean_module,label=module), size = 3) +
+  xlab("-log10(p_value of T-test)") +
+  ylab("Mean frequency of module-HP genes") +
+  theme(legend.position = "none")
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/HP_module_freq.pdf",width = 4,height = 4)
+
+df<-rbind(data.frame(cate = "HP",
+                         freq = HP_roary$freq),
+               data.frame(cate = "other_genes",
+                         freq = othergene_roary$freq))
+library(ggplot2)
+library(ggpubr)
+ggplot(df, aes(x=cate,y=freq,fill=cate)) +
+  geom_violin(color=NA,width=0.5) +
+  geom_boxplot(width = 0.1, outliers = F) +
+  theme_bw() +
+  scale_fill_brewer(palette = 1) +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  stat_compare_means(comparisons = list(c("HP", "other_genes")),
+                     label = "p.format", label.y = c(1.1)) 
+
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/HP_vs_othergene_freq.pdf",width = 3,height = 3.5)
+```
+
+#SNP result
+```{R}
+snp <- fread("/Users/lubeifang/Desktop/PA_HP/files/core.vcf",sep="\t",header = T)
+snp_HP <- fread("/Users/lubeifang/Desktop/PA_HP/files/2080HP.vcf",sep="\t",header = F)
+snp_HP <- snp_HP[,c(1305:1309,2,4,5,8)]
+snp_other <- fread("/Users/lubeifang/Desktop/PA_HP/files/othergene.vcf",sep="\t",header = F)
+snp_other <- snp_other[,c(1305:1309,2,4,5,8)]
+
+genelength <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/PGD2gene.csv")
+genelength$length <- genelength$end - genelength$start + 1
+genelength <- genelength[,c(7,9)]
+
+hp_snp <- data.frame(table(snp_HP$V1309))
+hp_snp <- merge(hp_snp,genelength, by.x="Var1",by.y="locus",all.x=T)
+hp_snp$SNP_per_kb <- hp_snp$Freq / (hp_snp$length / 1000)
+
+other_snp <- data.frame(table(snp_other$V1309))
+other_snp <- merge(other_snp,genelength, by.x="Var1",by.y="locus",all.x=T)
+other_snp$SNP_per_kb <- other_snp$Freq / (other_snp$length / 1000)
+
+
+df<-rbind(data.frame(cate = "HP",
+                         freq = hp_snp$SNP_per_kb),
+               data.frame(cate = "other_genes",
+                         freq = other_snp$SNP_per_kb))
+library(ggplot2)
+library(ggpubr)
+ggplot(df, aes(x=cate,y=freq,fill=cate)) +
+  geom_violin(color=NA,width=0.5) +
+  geom_boxplot(width = 0.1, outliers = F) +
+  theme_bw() +
+  scale_fill_brewer(palette = 1) +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  stat_compare_means(comparisons = list(c("HP", "other_genes")),
+                     label = "p.format", label.y = c(250))
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/HP_vs_othergene_SNPperkb.pdf",width = 3,height = 3.5)
+```
+
+# xisF4 cluster
+```{r}
+library(gggenes)
+
+genelength <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/PGD2gene.csv")
+xisF4_genes <- genelength[c(5644:5645, 698:704),]
+
+
+xisF4_genes$orientation <- ifelse(xisF4_genes$strand == "+", TRUE, FALSE)
+
+ggplot(xisF4_genes, aes(xmin = start, xmax = end, y = chr, fill = locus, label = locus, forward = orientation)) +
+  geom_gene_arrow(arrowhead_height = unit(6, "mm"), arrowhead_width = unit(2, "mm"),
+                  arrow_body_height = unit(6, "mm")) +
+  facet_wrap(~ chr, scales = "free", ncol = 1) +
+  scale_fill_manual(values = c(rep("#8A8DBF",23))) +
+  theme_genes() +
+  geom_gene_label(grow = T) +
+  theme(legend.position = "none")
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/xisF4_cluster.pdf",width = 8,height = 4)
+
+XisF4_roary <- roary_PAO1[roary_PAO1$Gene %in% xisF4_genes$locus,]
+# XisF4_snp <- hp_snp[hp_snp$Var1 %in% xisF4_genes$locus,]
+ggplot(XisF4_roary, aes(x=Gene, y=No..isolates.1, fill=Gene)) +
+  geom_bar(stat="identity") +
+  theme_classic2() +
+  scale_fill_brewer(palette = "Set3") +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  xlab("XisF4 related genes") +
+  ylab("Frequency in PAO1 pan-genome") +
+  geom_text(aes(label=No..isolates.1), vjust=-0.5)
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/xisF4_genes_freq.pdf",width = 6,height = 2)
+```
+
+#ST
+```{R}
+st_results <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/ST_result.txt", sep = "\t", header = F)
+geo_results <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/extracted_biosample_info.csv")
+info <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/panPA1295.tsv", sep = "\t")
+
+st_geo <- merge(st_results[,c(1,3)], info[,c(1,17)], by.x="V1",by.y="Assembly.Accession",all.x=T)
+st_geo <- merge(st_geo, geo_results[,c(1,2)], by.x="Assembly.BioSample.Accession",by.y="BioSample",all.x=T)
+
+st_geo[is.na(st_geo)] <- "missing"
+
+write.csv(st_geo,"/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/ST_geo_info.csv",row.names = F)
+
+
+roary_hp <- roary[roary$Gene %in% roary_PAO1$Gene.x,]
+roary_hp <- roary_hp[,-c(2:14)]
+roary_hp <- merge(roary_hp, roary_PAO1[,c(2,27:29)], by.x="Gene",by.y="Gene.x",all.x=T)
+mu <- read.csv("/Users/lubeifang/Desktop/PA_HP/files/HP_mu.csv")
+roary_hp <- merge(roary_hp, mu, by.x="Gene.y",by.y="HP2080")
+length(unique(roary_hp$Gene.y)) #2080
+for (i in 2:(ncol(roary_hp) - 3)) {
+  roary_hp[[i]] <- ifelse(roary_hp[[i]] != "", roary_hp$Gene.y, "missing")
+}
+
+roary_hp <- roary_hp[,2:(ncol(roary_hp) - 3)]
+roary_hp <- t(roary_hp)
+roary_hp <- data.frame(strain = rownames(roary_hp), roary_hp)
+roary_hp <- merge(roary_hp, st_geo[,c(2:4)], by.x="strain",by.y="V1",all.x=T)
+```
+
+
+## plot st and geo result
+```{r}
+library(patchwork)
+st_count <- data.frame(table(st_geo$V3))
+st_count <- st_count[order(-st_count$Freq), ]
+st_count$ST <- ifelse(st_count$Freq > 4, as.character(st_count$Var1), "others")
+p1 <- ggplot(st_count[2:21, ], aes(x = reorder(Var1, -Freq), y = Freq)) +
+  geom_bar(stat = "identity", fill = "steelblue") +
+  theme_bw() +
+  xlab("PubMLST_ST") +
+  ylab("Number of Isolates") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(aes(label = Freq), vjust = -0.5)
+
+geo_count <- data.frame(table(st_geo$GeographicLocation))
+geo_count <- geo_count[order(-geo_count$Freq), ]
+p2 <- ggplot(geo_count[1:20, ], aes(x = reorder(Var1, -Freq), y = Freq)) +
+  geom_bar(stat = "identity", fill = "coral") +
+  theme_bw() +
+  xlab("Geographic Location") +
+  ylab("Number of Isolates") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  geom_text(aes(label = Freq), vjust = -0.5)
+p <- p1 + p2
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/ST_geo_barplot.pdf",plot = p,width = 8,height = 3)
+```
+
+## st_hp
+```{r}
+library(scatterpie)
+library(tidyverse)
+library(igraph)
+library(ggraph)
+library(vegan)
+st_geo <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/pan-genome/ST_geo_info.csv")
+
+table(roary_hp$GeographicLocation)
+roary_sthp <- merge(roary_hp, st_count, by.x="V3",by.y="Var1")
+st_hp <- roary_sthp[roary_sthp$ST != "-",] %>%
+  group_by(ST) %>%
+  summarise(
+    HP_Set = list(unique(unlist(across(starts_with("X"))[across(starts_with("X")) != "missing"])))
+  )
+st_hp <- st_hp[is.na(st_hp$ST) == F, ]
+
+
+# find the unique TF in each PubMLST_ST
+unique_hp <- st_hp[st_hp$ST != "-" & st_hp$ST != "others", ] %>%
+  mutate(Unique_hp = lapply(HP_Set, function(HP_set, all_sets) {
+    other_sets <- setdiff(all_sets, list(HP_set))
+    other_hps <- unique(unlist(other_sets))
+    setdiff(HP_set, other_hps)
+  }, all_sets = st_hp$HP_Set)) %>%
+  mutate(
+    HP_Set = sapply(HP_Set, function(x) paste(x, collapse = ",")),
+    Unique_hp = sapply(Unique_hp, function(x) paste(x, collapse = ",")),
+    num = sapply(HP_Set, length) 
+  ) %>%
+  mutate(
+    num = sapply(HP_Set, function(x) length(unlist(strsplit(x, ","))))
+  )
+# write.csv(unique_hp, "/Users/lubeifang/Desktop/unique_HP_ST.csv", row.names = FALSE)
+
+x = list(ST235=unlist(strsplit(unique_hp[unique_hp$ST=="235",]$HP_Set, ",")),
+         ST111=unlist(strsplit(unique_hp[unique_hp$ST=="111",]$HP_Set, ",")),
+         ST253=unlist(strsplit(unique_hp[unique_hp$ST=="253",]$HP_Set, ",")))
+ggVennDiagram(x, label_alpha = 0, label_size = 6) +
+  scale_fill_distiller(palette = "Set3") +
+  theme(legend.position = "none")
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F5_pan/ST235_111_253_HP_venn.pdf",width = 5,height = 5)
+
+
+```
+
+
+```{r}
+
+## calculate jaccard distance
+jaccard_distance <- function(set1, set2) {
+  intersect_len <- length(intersect(set1, set2))
+  union_len <- length(union(set1, set2))
+  return(1 - (intersect_len / union_len))  # Jaccard distance = 1 - Jaccard similarity
+}
+
+st_names <- st_hp$ST
+hp_sets <- st_hp$HP_Set
+n <- length(hp_sets)
+dist_matrix <- matrix(0, n, n, dimnames = list(st_names, st_names))
+for (i in 1:n) {
+  for (j in 1:n) {
+    dist_matrix[i, j] <- jaccard_distance(hp_sets[[i]], hp_sets[[j]])
+  }
+}
+g <- graph_from_adjacency_matrix(dist_matrix, mode = "undirected", weighted = TRUE)
+g_mst <- mst(g)
+
+
+# location
+geo_count <- data.frame(table(st_geo$GeographicLocation))
+geo_count$geo <- ifelse(geo_count$Freq > 4, as.character(geo_count$Var1), "Other")
+st_geo <- merge(st_geo, geo_count[,c(1,3)], by.x="GeographicLocation",by.y="Var1",all.x=T)
+
+location_distribution <- st_geo[st_geo$V3 != "-", ] %>%
+  group_by(ST, geo) %>%
+  summarise(count = n(), .groups = "drop") %>% # 计算每个 geo 内的 count
+  group_by(ST) %>% # 按 st 分组
+  mutate(freq = count / sum(count)) %>% # 在每个 st 的范围内计算 freq
+  ungroup()
+
+
+layout <- ggraph::create_layout(g_mst, layout = "kk")
+
+node_positions <- layout %>%
+  as_tibble()
+node_positions <- node_positions[,c(3,1,2)]
+
+plot_data <- location_distribution %>%
+  pivot_wider(
+    names_from = geo,  # 将地理位置展开为列
+    values_from = freq,                # 使用频率作为列的值
+    values_fill = 0                    # 缺失值填充为 0
+  ) %>%
+  left_join(node_positions, by = c("ST" = "name"))
+
+node_data <- location_distribution %>%
+  group_by(ST) %>%
+  summarise(location_data = list(data.frame(location = geo, freq = freq)))
+
+V(g_mst)$location_data <- node_data$location_data[match(V(g_mst)$name, node_data$ST)]
+
+
+ggraph(g_mst, layout = "kk") +
+  geom_edge_link(alpha = 0.8, color = "grey") +
+  geom_node_point(size = 10, color = "lightblue") +
+  geom_node_text(aes(x = x, y = y-0.2, label = name), size = 3, color = "black") +
+  geom_scatterpie(
+    aes(x = x, y = y, group = ST, r = 0.1),
+    data = plot_data,
+    cols = unique(location_distribution$geo)
+  ) +
+  theme_void() +
+  labs(title = "MST with Geographic Distribution")
+ggsave("/Users/lubeifang/Desktop/a.pdf",width = 10,height = 8.5)
+
+```
+
+
+## geo_hp
+```{R}
+library(sf)
+library(rnaturalearth)
+library(ggplot2)
+library(scatterpie)
+library(rnaturalearth)
+library(rnaturalearthdata)
+
+geo_st <- st_geo %>%
+  subset(geo!="others"&geo!="missing"&geo!="not applicable"&V3!="-") %>%
+  group_by(geo) %>%
+  summarise(st_Set = list(unique(V3))) %>%
+  ungroup()
+
+
+unique_st <- geo_st %>%
+  mutate(Unique_st = lapply(st_Set, function(st_set, all_sets) {
+    other_sets <- setdiff(all_sets, list(st_set))
+    other_sts <- unique(unlist(other_sets))
+    setdiff(st_set, other_sts)
+  }, all_sets = geo_st$st_Set)) %>%
+  mutate(
+    st_Set = sapply(st_Set, function(x) paste(x, collapse = ",")),
+    Unique_st = sapply(Unique_st, function(x) paste(x, collapse = ",")),
+    num = sapply(st_Set, length) 
+  ) %>%
+  mutate(
+    num = sapply(st_Set, function(x) length(unlist(strsplit(x, ","))))
+  )
+write.csv(unique_st[,c(1,3,4)], "/Users/lubeifang/Desktop/unique_ST_geo.csv", row.names = FALSE)
+
+x = list(USA=unlist(strsplit(unique_st[unique_st$geo=="USA",]$st_Set, ",")),
+         China=unlist(strsplit(unique_st[unique_st$geo=="China",]$st_Set, ",")))
+ggVennDiagram(x, label_alpha = 0, label_size = 6) +
+  scale_fill_distiller(palette = "Set3") +
+  theme(legend.position = "none")
+
+
+st_count <- data.frame(table(st_geo$V3))
+st_count$ST <- ifelse(st_count$Freq > 4, as.character(st_count$Var1), "others")
+st_geo <- merge(st_geo, st_count[,c(1,3)], by.x="V3",by.y="Var1",all.x=T)
+location_distribution <- st_geo[st_geo$ST != "-",] %>%
+  group_by(geo, ST) %>%
+  summarise(count = n(), .groups = "drop") %>% 
+  group_by(geo) %>% 
+  mutate(freq = count / sum(count)) %>% 
+  ungroup()
+
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+country_coords <- world %>%
+  mutate(centroid = st_centroid(geometry)) %>% # 计算质心
+  mutate(lon = st_coordinates(centroid)[, 1], # 提取经度
+         lat = st_coordinates(centroid)[, 2]) # 提取纬度
+country_coords <- country_coords[,c("name_long", "lon", "lat")] %>%
+  st_drop_geometry() # 移除几何信息，返回普通数据框
+
+
+country_count <- data.frame(table(location_distribution$geo))
+geo_coordinates  <- country_coords %>%
+  filter(name_long %in% country_count[country_count$Freq > 10,]$Var1)
+# setdiff(country_count[country_count$Freq > 10,]$Var1,geo_coordinates$name_long)
+geo_coordinates <- rbind(geo_coordinates, data.frame(name_long = c("Russia","South Korea", "USA"),
+                                                     lon = c(95.64138,127.8348,-103.629563),
+                                                     lat = c(66.031722,44.74373,36.37337)))
+colnames(geo_coordinates)[1] <- "geo"
+
+
+
+plot_data <- location_distribution %>%
+  pivot_wider(
+    names_from = ST,  # 将地理位置展开为列
+    values_from = freq,                # 使用频率作为列的值
+    values_fill = 0                    # 缺失值填充为 0
+  ) %>%
+  left_join(geo_coordinates, by = "geo") %>%
+  subset(geo != "no_info" & geo != "others")  
+
+
+library(ggplot2)
+library(ggspatial)
+library(ggforce) # 用于 geom_scatterpie
+library(MetBrewer)
+
+ggplot(data = world) +
+  geom_sf(fill = "antiquewhite", color = "gray50") + # 地图背景设置
+  geom_scatterpie(
+    aes(x = lon, y = lat, group = geo, r = 20), # r 控制饼图大小
+    data = plot_data,
+    cols = unique(location_distribution$ST),
+    alpha = 0.8,
+    color = "grey", # 饼图边框颜色
+    cex = 0.2
+  ) +
+  coord_sf() +
+  theme_void() +
+  labs(
+    title = "Global Distribution of ST Types",
+    fill = "ST Types"
+  ) +
+  geom_text(
+    aes(x = lon, y = lat, label = geo),
+    data = plot_data,
+    size = 3, # 增加标签字体大小
+    # color = "darkred", # 标签颜色
+    nudge_y = 12, # 调整标签位置
+    # fontface = "bold", # 加粗字体
+    # family = "Arial"
+  ) +
+  scale_fill_manual(values= MetBrewer::met.brewer("Cassatt2", length(unique(location_distribution$ST)))) +
+  theme(
+    # plot.title = element_text(size = 16, face = "bold", hjust = 0.5, color = "darkblue"),
+    legend.title = element_text(size = 12, face = "bold"),
+    legend.text = element_text(size = 10),
+    panel.background = element_rect(fill = "lightblue", color = NA)
+  ) +
+  annotation_scale(location = "bl", width_hint = 0.5) + # 添加比例尺
+  annotation_north_arrow(location = "tr", which_north = "true", 
+                         style = north_arrow_fancy_orienteering) # 添加指南针
+ggsave("/Users/lubeifang/Desktop/b.pdf",width = 10,height = 8.5)
+
+```

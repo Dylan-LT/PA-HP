@@ -1,0 +1,111 @@
+# PA-HP EVO
+```{R}
+library(dplyr)
+library(tidyr)
+rm(list=ls())
+
+# load blast results
+bp <- list.files("/Users/lubeifang/Desktop/PA_HP/evolution/24otherstrain/blastp_results/")
+pro_len <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/24otherstrain/protein_lengths.csv")
+
+
+full_results <- data.frame()
+
+for (i in bp){
+  print (i)
+  blast <- read.csv(paste0("/Users/lubeifang/Desktop/PA_HP/evolution/24otherstrain/blastp_results/",i), sep = "\t", header = F)
+  colnames(blast) = c("Query_id","Subject_id","Identity","Align_length","Miss_match",
+                      "Gap","Query_start","Query_end","Subject_start","Subject_end","E_value","Score")
+  blast_f <- merge(blast,pro_len,by.x = "Subject_id",by.y="Protein_ID")
+  blast_f$align_rate <- blast_f$Align_length/blast_f$Length
+  blast_f$final_identity <- blast_f$align_rate * blast_f$Identity
+  
+  blast_f = blast_f[order(blast_f$final_identity, decreasing = T),]
+  blast_f = blast_f[!duplicated(blast_f[,c("Subject_id")]),]
+  
+  blast_f = blast_f[blast_f$final_identity >= 50,]
+
+  full_results <- rbind(full_results,data.frame(strain=gsub(".faa.txt","", i),as.data.frame(blast_f)))
+}
+
+
+length(unique(full_results$strain))
+length(unique(full_results$Subject_id))
+
+
+results <- pivot_wider(full_results[,c(1,2,16)], names_from = strain, values_from = final_identity, values_fill = list(final_identity= 0))
+
+
+# write.csv(full_results,"/Users/lubeifang/Desktop/PA_HP/evolution/blast_f.csv", row.names = F, quote=F)
+# write.csv(as.data.frame(results),"/Users/lubeifang/Desktop/PA_HP/evolution/blast_matrix.csv", row.names = F, quote=F)
+```
+
+
+```{r}
+full_results <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/blast_f.csv")
+matrix <- read.csv("/Users/lubeifang/Desktop/PA_HP/evolution/blast_matrix.csv")
+
+count_df <- data.frame(table(full_results$strain))
+ggplot(count_df[count_df$Var1!= "PseudomonasaeruginosaPAO1" ,], aes(x=Var1,y=Freq))+
+  geom_bar(stat="identity", width = 0.5) +
+  scale_fill_brewer(palette = "Greys") +
+  theme_classic() +
+  theme(panel.grid.major = element_blank(), 
+        panel.grid.minor = element_blank(),
+        legend.position = "none",
+        axis.text.x = element_text(angle=45,vjust = 1,hjust=1)) +
+  ylab("") +
+  xlab("") +
+  geom_text(aes(label = Freq), vjust = -0.5, size = 3) +
+  ylim(0,2200)
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F6_evo/HPhomo_count.pdf",width = 10, height = 4)
+
+ggplot(full_results[full_results$strain != "PseudomonasaeruginosaPAO1",],aes(x=strain,y=final_identity,fill=strain)) +
+  geom_violin(width=3,drop = FALSE,color=NA) +
+  theme_bw() +
+  theme(legend.position = "none",
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        axis.text.x = element_text(angle = 45,vjust=1,hjust=1))
+ggsave("/Users/lubeifang/Desktop/PA_HP/Figures/F6_evo/identity_violin.pdf",width = 10, height = 6)
+
+library(pheatmap)
+matrix <- as.matrix(results[,2:24])
+rownames(matrix ) <- results$Subject_id
+
+pheatmap_result <- pheatmap(matrix,
+         scale = "row",
+         clustering_distance_rows = "correlation",
+         clustering_distance_cols = "euclidean",
+         clustering_method = "complete",
+         show_rownames = F,
+         show_colnames = TRUE,
+         fontsize_row = 8,
+         height = 8,
+         width=5,
+         legend = T,
+         filename = "/Users/lubeifang/Desktop/test.pdf")
+# cluster into 7 clusters
+row_clusters <- cutree(pheatmap_result$tree_row, k = 5)
+table(row_clusters)
+# add annotation
+annotation_row <- data.frame(Cluster = factor(row_clusters))
+rownames(annotation_row) <- results$Subject_id
+
+my_colors <- colorRampPalette(c("lightblue", "orange", "pink"))(50)
+pheatmap(matrix, 
+         scale = "row", 
+         clustering_distance_rows = "correlation", 
+         clustering_distance_cols = "euclidean", 
+         clustering_method = "complete", 
+         show_rownames = F, 
+         show_colnames = TRUE, 
+         fontsize_row = 8,
+         height = 8,
+         width = 5,
+         legend = TRUE,
+         annotation_row = annotation_row,
+         color=my_colors,
+         filename = "/Users/lubeifang/Desktop/heatmap_genes.pdf")
+write.csv(annotation_row,"/Users/lubeifang/Desktop/PA_HP/evolution/2081HP_5cluster.csv",row.names = T)
+```
